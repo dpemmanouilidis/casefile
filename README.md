@@ -89,10 +89,10 @@ no logs would not appear. This is documented in
 query, against the `transactions` and `transfers` tables respectively:**
 
 ```sql
-SELECT COUNT(*) FROM transactions
+SELECT COUNT(*) FROM transfers
 WHERE chain_id = 'ethereum' AND (from_address = :addr OR to_address = :addr);
 
-SELECT COUNT(*) FROM transfers
+SELECT COUNT(*) FROM transactions
 WHERE chain_id = 'ethereum' AND (from_address = :addr OR to_address = :addr);
 ```
 
@@ -115,19 +115,27 @@ above and say so, not a console log line from an ingestion run (which is a
 progress indicator, not a measurement).
 
 Full dataset as of the last ingestion (`data/casefile.db`, not committed —
-regenerate with the commands in this README):
+regenerate with the commands in this README). **Transfers is the headline
+number** — it's the one that reflects whether an address actually moved
+value, since `transfers.from_address`/`to_address` are always the real
+counterparties of that value movement. `tx (outer-tx endpoints only)` is a
+secondary, stricter count: it's `0` whenever every one of an address's
+transfers happened via an internal call from a router/relayer contract (the
+address was never itself the top-level transaction's sender or recipient) —
+that is expected for contracts like the Tornado.Cash pool, not a sign the
+pipeline missed anything:
 
-| subject | address | tx (strict, per query above) | transfers (same query) |
+| subject | address | transfers (headline) | tx (outer-tx endpoints only) |
 |---|---|---:|---:|
-| OFAC sanctioned 1 | `0x04dba1194ee10112fe6c3207c0687def0e78bacf` | 71 | 73 |
-| OFAC sanctioned 2 | `0x0ee5067b06776a89ccc7dc8ee369984ad7db5e06` | 312 | 317 |
-| Binance 12 (deprecated) | `0xe0f0cfde7ee664943906f17f7f14342e76a5cec7` | 3,241 | 4,185 |
-| Kraken deposit | `0x0003cec240a1ff499f3aea605fb277be87734040` | 153 | 163 |
-| Binance: Hot Wallet 20 (active) | `0xf977814e90da44bfa03b6295a0616a897441acec` | 9 | 53 |
-| Tornado.Cash pool | `0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc` | 0 | 726 |
-| control 1 | `0xc0397d5f71200102ec9152473f58362f0290fc4d` | 10 | 50 |
-| control 2 | `0xfc908d18f854f93a3b6423226c79334a0947cbfd` | 5 | 13 |
-| control 3 | `0x9f5dd7e34d5ae6a27896a9e1b209f0c22da8aa0d` | 1 | 3 |
+| OFAC sanctioned 1 | `0x04dba1194ee10112fe6c3207c0687def0e78bacf` | 73 | 71 |
+| OFAC sanctioned 2 | `0x0ee5067b06776a89ccc7dc8ee369984ad7db5e06` | 317 | 312 |
+| Binance 12 (deprecated) | `0xe0f0cfde7ee664943906f17f7f14342e76a5cec7` | 4,185 | 3,241 |
+| Kraken deposit | `0x0003cec240a1ff499f3aea605fb277be87734040` | 163 | 153 |
+| Binance: Hot Wallet 20 (active) | `0xf977814e90da44bfa03b6295a0616a897441acec` | 53 | 9 |
+| Tornado.Cash pool | `0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc` | 726 | 0 |
+| control 1 | `0xc0397d5f71200102ec9152473f58362f0290fc4d` | 50 | 10 |
+| control 2 | `0xfc908d18f854f93a3b6423226c79334a0947cbfd` | 13 | 5 |
+| control 3 | `0x9f5dd7e34d5ae6a27896a9e1b209f0c22da8aa0d` | 3 | 1 |
 
 Overall: `chains: 1, addresses: 2736, transactions: 4331, transfers: 5581,
 ingest_runs: 27`, `0` orphan transfers (every transfer's `tx_hash` has a
