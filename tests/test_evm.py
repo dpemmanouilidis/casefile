@@ -1,4 +1,6 @@
+from ingest.evm import AlchemyClient
 from tests.conftest import ADDRESS, COUNTERPARTY, TOKEN, TX_HASH_ERC20, TX_HASH_NATIVE
+from tests.fake_rpc import FakeSession
 
 
 def test_transactions_normalises_native_and_erc20(client):
@@ -39,3 +41,84 @@ def test_transfers_and_transactions_are_deterministic_across_calls(client):
     first = list(client.transfers(ADDRESS, 0, 200))
     second = list(client.transfers(ADDRESS, 0, 200))
     assert first == second
+
+
+def test_get_asset_transfers_follows_pageKey_across_multiple_pages():
+    """alchemy_getAssetTransfers caps each response at maxCount and returns a
+    pageKey when more results exist. If the client stopped after the first
+    page it would silently truncate history — this proves it does not.
+    """
+    pages = {
+        None: {
+            "transfers": [
+                {
+                    "uniqueId": "p1",
+                    "hash": "0x" + "a" * 64,
+                    "from": ADDRESS,
+                    "to": COUNTERPARTY,
+                    "value": 1,
+                    "asset": "ETH",
+                    "category": "external",
+                    "blockNum": hex(10),
+                    "rawContract": {"value": hex(10**18), "address": None, "decimal": hex(18)},
+                    "metadata": {"blockTimestamp": "2026-09-01T00:00:00.000Z"},
+                }
+            ],
+            "pageKey": "next-page",
+        },
+        "next-page": {
+            "transfers": [
+                {
+                    "uniqueId": "p2",
+                    "hash": "0x" + "b" * 64,
+                    "from": ADDRESS,
+                    "to": COUNTERPARTY,
+                    "value": 2,
+                    "asset": "ETH",
+                    "category": "external",
+                    "blockNum": hex(20),
+                    "rawContract": {"value": hex(2 * 10**18), "address": None, "decimal": hex(18)},
+                    "metadata": {"blockTimestamp": "2026-09-01T00:10:00.000Z"},
+                }
+            ],
+            # no pageKey: this is the last page
+        },
+    }
+    seen_page_keys = []
+
+    def paginated_asset_transfers(params):
+        query = params[0]
+        if query.get("fromAddress") != ADDRESS:
+            return {"transfers": []}
+        page_key = query.get("pageKey")
+        seen_page_keys.append(page_key)
+        return pages[page_key]
+
+    session = FakeSession(
+        {
+            "eth_blockNumber": lambda _params: hex(200),
+            "alchemy_getAssetTransfers": paginated_asset_transfers,
+            "eth_getTransactionByHash": lambda params: {
+                "hash": params[0],
+                "blockNumber": hex(10),
+                "from": ADDRESS,
+                "to": COUNTERPARTY,
+                "value": hex(10**18),
+                "input": "0x",
+                "gasPrice": hex(10**10),
+            },
+            "eth_getTransactionReceipt": lambda params: {
+                "status": "0x1",
+                "gasUsed": hex(21000),
+                "effectiveGasPrice": hex(10**10),
+            },
+        }
+    )
+    paginating_client = AlchemyClient(api_key="test-key", session=session, sleep=lambda _s: None)
+
+    transfers = list(paginating_client.transfers(ADDRESS, 0, 200))
+
+    # Both pages' results made it through: the client followed pageKey rather
+    # than stopping at the first page's maxCount.
+    assert {t.tx_hash for t in transfers} == {"0x" + "a" * 64, "0x" + "b" * 64}
+    assert seen_page_keys == [None, "next-page"]
