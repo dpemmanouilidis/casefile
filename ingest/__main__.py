@@ -62,9 +62,20 @@ def ingest_address(
         raise
 
     tx_count = len(transactions)
+    tx_hashes = {tx.tx_hash for tx in transactions}
+    # A transfer whose parent transaction we could not fetch (reorg,
+    # indexing lag, or any other None result from the RPC) would otherwise
+    # be written with no matching transactions row — every downstream claim
+    # in narrate/ must cite a transaction, so that join can never be allowed
+    # to silently fail. Drop the orphan and say so in the run's note rather
+    # than writing around the gap.
+    orphaned_transfers = [tr for tr in transfers if tr.tx_hash not in tx_hashes]
+    transfers = [tr for tr in transfers if tr.tx_hash in tx_hashes]
+
     if dry_run:
-        print(f"  {address}: {len(transactions)} transactions, {len(transfers)} transfers (dry-run, nothing written)")
-        return "ok", tx_count, None
+        note = f"{len(orphaned_transfers)} transfer(s) would be dropped: no parent transaction" if orphaned_transfers else None
+        print(f"  {address}: {len(transactions)} transactions, {len(transfers)} transfers (dry-run, nothing written)" + (f" — {note}" if note else ""))
+        return "ok", tx_count, note
 
     db.upsert_address(conn, client.chain_id, address, is_subject=True)
     for tx in transactions:
@@ -75,6 +86,13 @@ def ingest_address(
     for tr in transfers:
         db.insert_transfer(conn, tr)
     conn.commit()
+
+    if orphaned_transfers:
+        orphan_hashes = sorted({tr.tx_hash for tr in orphaned_transfers})
+        note = f"{len(orphaned_transfers)} transfer(s) skipped, no parent transaction available for hash(es): {', '.join(orphan_hashes)}"
+        db.finish_run(conn, run_id, "partial", tx_count, note)
+        print(f"  {address}: {len(transactions)} transactions, {len(transfers)} transfers written — PARTIAL: {note}")
+        return "partial", tx_count, note
 
     db.finish_run(conn, run_id, "ok", tx_count, None)
     print(f"  {address}: {len(transactions)} transactions, {len(transfers)} transfers written")

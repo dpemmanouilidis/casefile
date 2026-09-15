@@ -139,6 +139,44 @@ def test_from_block_after_to_block_is_rejected(tmp_path, monkeypatch):
     assert exit_code == 1
 
 
+def test_transfer_with_unfetchable_parent_tx_is_dropped_and_run_marked_partial(tmp_path, monkeypatch):
+    """A transfer whose parent transaction lookup returns None (e.g. reorg or
+    indexing lag) must never be written without a matching transactions row —
+    every downstream claim cites a transaction hash present in the evidence.
+    """
+    address = "0xaaaa000000000000000000000000000000000a"
+    counterparty = "0xbbbb000000000000000000000000000000000b"
+    tx_hash = "0x" + "8" * 64
+    handlers = base_handlers(address, counterparty, tx_hash)
+    handlers["eth_getTransactionByHash"] = lambda params: None
+    make_client(monkeypatch, handlers)
+
+    addresses_file = tmp_path / "addresses.txt"
+    addresses_file.write_text(address + "\n")
+    db_path = tmp_path / "casefile.db"
+
+    exit_code = cli.main(["--chain", "ethereum", "--addresses", str(addresses_file), "--db", str(db_path)])
+
+    assert exit_code == 1
+    conn = db.connect(db_path)
+    counts = db.counts(conn)
+    assert counts["transactions"] == 0
+    assert counts["transfers"] == 0  # dropped, not orphaned
+
+    orphans = conn.execute(
+        """
+        SELECT COUNT(*) FROM transfers t
+        LEFT JOIN transactions x ON t.chain_id = x.chain_id AND t.tx_hash = x.tx_hash
+        WHERE x.tx_hash IS NULL
+        """
+    ).fetchone()[0]
+    assert orphans == 0
+
+    run = conn.execute("SELECT status, note FROM ingest_runs").fetchone()
+    assert run[0] == "partial"
+    assert tx_hash in run[1]
+
+
 def test_rate_limit_exhaustion_records_partial_run(tmp_path, monkeypatch):
     address = "0xaaaa000000000000000000000000000000000a"
     counterparty = "0xbbbb000000000000000000000000000000000b"
