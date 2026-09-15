@@ -92,6 +92,53 @@ def test_running_twice_is_idempotent(tmp_path, monkeypatch):
     assert counts["ingest_runs"] == 2  # one row per run, always
 
 
+def test_explicit_block_range_is_used_verbatim_and_skips_latest_block_lookup(tmp_path, monkeypatch):
+    address = "0xaaaa000000000000000000000000000000000a"
+    counterparty = "0xbbbb000000000000000000000000000000000b"
+    tx_hash = "0x" + "6" * 64
+    _client, fake_session = make_client(monkeypatch, base_handlers(address, counterparty, tx_hash))
+
+    addresses_file = tmp_path / "addresses.txt"
+    addresses_file.write_text(address + "\n")
+    db_path = tmp_path / "casefile.db"
+
+    exit_code = cli.main(
+        [
+            "--chain", "ethereum",
+            "--addresses", str(addresses_file),
+            "--from-block", "10",
+            "--to-block", "60",
+            "--db", str(db_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert ("eth_blockNumber", []) not in fake_session.call_log
+    run = db.connect(db_path).execute("SELECT from_block, to_block FROM ingest_runs").fetchone()
+    assert run == (10, 60)
+
+
+def test_from_block_after_to_block_is_rejected(tmp_path, monkeypatch):
+    address = "0xaaaa000000000000000000000000000000000a"
+    counterparty = "0xbbbb000000000000000000000000000000000b"
+    tx_hash = "0x" + "7" * 64
+    make_client(monkeypatch, base_handlers(address, counterparty, tx_hash))
+
+    addresses_file = tmp_path / "addresses.txt"
+    addresses_file.write_text(address + "\n")
+
+    exit_code = cli.main(
+        [
+            "--chain", "ethereum",
+            "--addresses", str(addresses_file),
+            "--from-block", "100",
+            "--to-block", "10",
+            "--db", str(tmp_path / "casefile.db"),
+        ]
+    )
+    assert exit_code == 1
+
+
 def test_rate_limit_exhaustion_records_partial_run(tmp_path, monkeypatch):
     address = "0xaaaa000000000000000000000000000000000a"
     counterparty = "0xbbbb000000000000000000000000000000000b"

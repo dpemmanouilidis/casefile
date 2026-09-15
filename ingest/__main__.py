@@ -85,10 +85,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m ingest")
     parser.add_argument("--chain", required=True, choices=["ethereum"])
     parser.add_argument("--addresses", required=True, help="path to a file, one address per line")
-    parser.add_argument("--blocks", type=int, default=DEFAULT_BLOCKS, help=f"blocks of history to walk back (default {DEFAULT_BLOCKS})")
+    parser.add_argument("--blocks", type=int, default=DEFAULT_BLOCKS, help=f"blocks of history to walk back from --to-block or the chain head (default {DEFAULT_BLOCKS})")
+    parser.add_argument("--from-block", type=int, default=None, help="fixed start block; overrides --blocks. Use with --to-block for a fully reproducible range")
+    parser.add_argument("--to-block", type=int, default=None, help="fixed end block; defaults to the current chain head")
     parser.add_argument("--dry-run", action="store_true", help="fetch and normalise, print counts, write nothing")
     parser.add_argument("--db", default=DEFAULT_DB_PATH)
     args = parser.parse_args(argv)
+
+    if args.from_block is not None and args.to_block is not None and args.from_block > args.to_block:
+        print("--from-block must be <= --to-block", file=sys.stderr)
+        return 1
 
     addresses = load_addresses(args.addresses)
     if not addresses:
@@ -103,9 +109,11 @@ def main(argv: list[str] | None = None) -> int:
         conn = db.connect(args.db)
         db.ensure_chain(conn, "ethereum", "ETH", 18)
 
-    latest = client.latest_block()
-    from_block = max(0, latest - args.blocks)
-    to_block = latest
+    if args.to_block is not None:
+        to_block = args.to_block
+    else:
+        to_block = client.latest_block()
+    from_block = args.from_block if args.from_block is not None else max(0, to_block - args.blocks)
 
     print(f"chain=ethereum blocks=[{from_block}, {to_block}] addresses={len(addresses)} dry_run={args.dry_run}")
 
