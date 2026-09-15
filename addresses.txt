@@ -1,0 +1,13 @@
+# ethereum subject addresses — hand-sourced 2026-09-16, do not edit without a source
+# sanctioned
+0x04dba1194ee10112fe6c3207c0687def0e78bacf  # OFAC Blocked — etherscan.io/accounts/label/ofac-sanctioned, 71 txns
+0x0ee5067b06776a89ccc7dc8ee369984ad7db5e06  # OFAC Blocked — etherscan.io/accounts/label/ofac-sanctioned, 312 txns
+# exchange
+0xe0f0cfde7ee664943906f17f7f14342e76a5cec7  # Binance 12 hot wallet — etherscan label, 551,808 txns
+0x0003cec240a1ff499f3aea605fb277be87734040  # Kraken deposit address — etherscan label, 152 txns
+# mixer
+0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc  # Tornado.Cash 0.1 ETH pool contract — etherscan label, 10,291 txns
+# controls — unlabelled EOAs from block ~25985933
+0xc0397d5f71200102ec9152473f58362f0290fc4d  # control, 9 txns, 14h old
+0xfc908d18f854f93a3b6423226c79334a0947cbfd  # control, 297 txns, EIP-7702 delegated (TokenPocket)
+0x9f5dd7e34d5ae6a27896a9e1b209f0c22da8aa0d  # control, 10 txns, 13d old, EIP-7702 delegated
