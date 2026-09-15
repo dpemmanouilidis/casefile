@@ -74,7 +74,7 @@ def ingest_address(
 
     if dry_run:
         note = f"{len(orphaned_transfers)} transfer(s) would be dropped: no parent transaction" if orphaned_transfers else None
-        print(f"  {address}: {len(transactions)} transactions, {len(transfers)} transfers (dry-run, nothing written)" + (f" — {note}" if note else ""))
+        print(f"  {address}: {len(transactions)} transactions fetched, {len(transfers)} transfers fetched (dry-run, nothing written)" + (f" — {note}" if note else ""))
         return "ok", tx_count, note
 
     db.upsert_address(conn, client.chain_id, address, is_subject=True)
@@ -91,11 +91,11 @@ def ingest_address(
         orphan_hashes = sorted({tr.tx_hash for tr in orphaned_transfers})
         note = f"{len(orphaned_transfers)} transfer(s) skipped, no parent transaction available for hash(es): {', '.join(orphan_hashes)}"
         db.finish_run(conn, run_id, "partial", tx_count, note)
-        print(f"  {address}: {len(transactions)} transactions, {len(transfers)} transfers written — PARTIAL: {note}")
+        print(f"  {address}: {len(transactions)} transactions fetched, {len(transfers)} transfers written — PARTIAL: {note}")
         return "partial", tx_count, note
 
     db.finish_run(conn, run_id, "ok", tx_count, None)
-    print(f"  {address}: {len(transactions)} transactions, {len(transfers)} transfers written")
+    print(f"  {address}: {len(transactions)} transactions fetched, {len(transfers)} transfers written")
     return "ok", tx_count, None
 
 
