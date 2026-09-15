@@ -16,7 +16,7 @@ def test_load_addresses_skips_comments_and_blank_lines(tmp_path):
     ]
 
 
-def test_repo_addresses_file_parses_to_eight_addresses():
+def test_repo_addresses_file_parses_to_nine_addresses():
     addresses = load_addresses("addresses.txt")
-    assert len(addresses) == 8
+    assert len(addresses) == 9
     assert all(a.startswith("0x") for a in addresses)
