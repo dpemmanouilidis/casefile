@@ -199,6 +199,67 @@ class AlchemyClient:
                 method_id=method_id,
             )
 
+    def _boundary_block(
+        self, address: str, direction: str, order: str, from_block: int, to_block: int
+    ) -> int | None:
+        """The block of the single earliest (`order="asc"`) or latest
+        (`order="desc"`) transfer where `address` appears in `direction`
+        role, within [from_block, to_block], or None if there is none.
+        `maxCount=1` makes this a one-page, cheap existence probe.
+        """
+        key = "fromAddress" if direction == "from" else "toAddress"
+        params: dict[str, Any] = {
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+            key: address,
+            "category": TRANSFER_CATEGORIES,
+            "withMetadata": True,
+            "excludeZeroValue": False,
+            "order": order,
+            "maxCount": hex(1),
+        }
+        result = self._rpc("alchemy_getAssetTransfers", [params])
+        transfers = result.get("transfers", [])
+        if not transfers:
+            return None
+        return int(transfers[0]["blockNum"], 16)
+
+    def activity_bounds(self, address: str, to_block: int) -> tuple[int | None, int | None]:
+        """Does `address` have any transfer activity at all in [0, to_block],
+        and if so, the first and last block of it?
+
+        Alchemy's `fromAddress`/`toAddress` filters can't be combined into a
+        single OR query (undocumented, and the rest of this client already
+        treats them as separate queries — see `_all_asset_transfers`), so
+        this checks both roles. Two ascending `maxCount=1` calls (one per
+        role) are enough to prove non-existence — a genuinely inactive
+        address costs exactly those 2 calls. If either role has activity,
+        two more descending calls find the last block, for 4 calls total.
+
+        Exists to disambiguate a zero-transfer ingest window: "this address
+        is quiet" and "this window missed its activity" must never look the
+        same. Returns (None, None) only for the former.
+        """
+        first_blocks = [
+            block
+            for block in (
+                self._boundary_block(address, direction, "asc", 0, to_block)
+                for direction in ("from", "to")
+            )
+            if block is not None
+        ]
+        if not first_blocks:
+            return None, None
+        last_blocks = [
+            block
+            for block in (
+                self._boundary_block(address, direction, "desc", 0, to_block)
+                for direction in ("from", "to")
+            )
+            if block is not None
+        ]
+        return min(first_blocks), max(last_blocks)
+
     def is_contract(self, address: str) -> bool:
         code = self._rpc("eth_getCode", [address, "latest"])
         return code is not None and code != "0x"

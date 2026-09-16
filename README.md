@@ -27,7 +27,19 @@ python -m ingest --chain ethereum --addresses addresses.txt [--blocks 5000] [--f
   not been changed to anchor to each subject's own activity. (`enrich
   expand`, described below, does anchor its per-candidate windows to each
   candidate's own last known block; that fix has not been carried back
-  into `ingest` itself.)
+  into `ingest` itself.) What *has* changed: a window that comes back with
+  zero transactions and zero transfers for an address is no longer silently
+  indistinguishable from a genuinely quiet address. Before writing the
+  run's row, `ingest_address` probes whether that address has *any*
+  transfer activity in `[0, to_block]` — two cheap `maxCount=1`
+  `alchemy_getAssetTransfers` calls (ascending, one per from/to role) if
+  the address is truly inactive, four (adding the descending pair) if it
+  isn't. A hit marks the run `partial` with a note naming the address's
+  real active block range, so the window (not the address) is what gets
+  blamed; a genuine miss is recorded as `ok` with an explicit
+  `verified empty` note. See [ingest/evm.py](ingest/evm.py)
+  (`AlchemyClient.activity_bounds`) and
+  [ingest/__main__.py](ingest/__main__.py) (`zero_result_note`).
 - `--from-block` / `--to-block` — a fixed, reproducible block range,
   overriding `--blocks`. `--to-block` alone still defaults to the current
   chain head.

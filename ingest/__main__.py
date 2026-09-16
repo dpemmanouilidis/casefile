@@ -36,6 +36,23 @@ def load_api_key() -> str:
     return key
 
 
+def zero_result_note(client: AlchemyClient, address: str, from_block: int, to_block: int, would: bool = False) -> str:
+    """Disambiguates a zero-transaction/zero-transfer window: quiet address,
+    or a window that missed real activity? Costs 2-4 extra RPC calls (see
+    AlchemyClient.activity_bounds), only ever spent when a window already
+    came back empty.
+    """
+    first_block, last_block = client.activity_bounds(address, to_block)
+    verb = "would return" if would else "returned"
+    if first_block is None:
+        return f"verified empty: no activity found for this address in [0, {to_block}]"
+    return (
+        f"window [{from_block}, {to_block}] {verb} zero transactions/transfers, but this "
+        f"address has activity between blocks {first_block} and {last_block} — the window "
+        f"missed it, this is not a quiet address"
+    )
+
+
 def ingest_address(
     conn,
     client: AlchemyClient,
@@ -73,7 +90,12 @@ def ingest_address(
     transfers = [tr for tr in transfers if tr.tx_hash in tx_hashes]
 
     if dry_run:
-        note = f"{len(orphaned_transfers)} transfer(s) would be dropped: no parent transaction" if orphaned_transfers else None
+        if orphaned_transfers:
+            note = f"{len(orphaned_transfers)} transfer(s) would be dropped: no parent transaction"
+        elif tx_count == 0 and not transfers:
+            note = zero_result_note(client, address, from_block, to_block, would=True)
+        else:
+            note = None
         print(f"  {address}: {len(transactions)} transactions fetched, {len(transfers)} transfers fetched (dry-run, nothing written)" + (f" — {note}" if note else ""))
         return "ok", tx_count, note
 
@@ -93,6 +115,13 @@ def ingest_address(
         db.finish_run(conn, run_id, "partial", tx_count, note)
         print(f"  {address}: {len(transactions)} transactions fetched, {len(transfers)} transfers written — PARTIAL: {note}")
         return "partial", tx_count, note
+
+    if tx_count == 0 and not transfers:
+        note = zero_result_note(client, address, from_block, to_block)
+        status = "ok" if note.startswith("verified empty") else "partial"
+        db.finish_run(conn, run_id, status, tx_count, note)
+        print(f"  {address}: 0 transactions, 0 transfers written — {note}")
+        return status, tx_count, note
 
     db.finish_run(conn, run_id, "ok", tx_count, None)
     print(f"  {address}: {len(transactions)} transactions fetched, {len(transfers)} transfers written")
