@@ -144,3 +144,109 @@ matching row in `transactions`).
 ### Out of scope for this milestone
 
 Labels, tracing, rules, the model, any UI, Solana, performance work.
+
+## Milestone 2: enrich (labels and tracing)
+
+See [docs/milestone-2.md](docs/milestone-2.md) for the full spec.
+
+### Part A — labels and is_contract
+
+```
+python -m enrich load-labels [--dir enrich/labels] [--db data/casefile.db]
+python -m enrich compute-is-contract [--db data/casefile.db]
+```
+
+`load-labels` reads every `*.csv` under `enrich/labels/` (currently
+[labels.csv](enrich/labels/labels.csv), the nine `addresses.txt` subjects,
+and [ofac_sdn_eth.csv](enrich/labels/ofac_sdn_eth.csv), 120 Ethereum
+addresses extracted from Treasury's official SDN Advanced XML export — a
+one-time bulk download, not scraped; see the file's header for provenance
+and [scripts/extract_ofac_eth.py](scripts/extract_ofac_eth.py) for the
+extraction). A malformed `category` rejects the whole file before writing
+anything (rule 3, fail closed) rather than writing the good rows ahead of
+the bad one. Loading is idempotent per file: re-running a file replaces
+exactly the rows whose `source` it declares and leaves every other file's
+rows untouched, so a row removed from a CSV disappears on the next load
+instead of accumulating.
+
+`compute-is-contract` sets `addresses.is_contract` via `eth_getCode`,
+one RPC call per address that doesn't have it set yet (0 calls on a
+re-run).
+
+Real run: **12/2736 addresses labelled, 2724 unknown** — a thin seed, as
+expected before the top-25-counterparty labelling round is folded in.
+217/2736 addresses are contracts (2736 `eth_getCode` calls on the first
+run, 0 on re-run).
+
+### Part B — tracing
+
+```
+python -m enrich trace --chain ethereum --address 0x... --hops N [--direction out|in|both] [--min-value RAW] [--max-fanout 50] [--db data/casefile.db]
+python -m enrich show --trace-id N [--format text|json]
+python -m enrich expand --chain ethereum --address 0x... [--top 20] [--blocks 5000]
+```
+
+`trace` walks the local `transfers` table breadth-first from a subject and
+makes **zero RPC calls** — anything not already ingested is simply not in
+the graph, and the trace says so explicitly rather than looking like a
+verified dead end. `--min-value` is a raw base-unit integer threshold, not
+normalised across assets (comparing 1 ETH to 1 USDT would require a price
+we don't have and won't fabricate) — it's most meaningful when the
+transfers being compared share an asset.
+
+Expansion stops at a node for exactly one of four reasons, recorded as
+`terminal_reason` on the edge:
+
+- **`hop_limit`** — the requested `--hops` was reached.
+- **`custody_change`** — the node is labelled `exchange` or `mixer`; the
+  on-chain link breaks there (a domain rule, not a data gap).
+- **`not_ingested`** — the node has no local transfers of its own, so the
+  path is unknown rather than ended. This must never be silently
+  indistinguishable from a real leaf: with `--direction both`, the edge
+  that reaches a node always touches that node, so the check explicitly
+  excludes the incoming edge itself — otherwise every node would look
+  "ingested" purely because we happened to see the one transfer that led
+  to it, and `not_ingested` could never fire.
+- **`fan_out_cap`** — the node has more than `--max-fanout` (default 50)
+  distinct counterparties at that hop; the cap and true count are recorded
+  in the run's `note` (`trace_edges` has no room for that detail, only the
+  fixed-enum `terminal_reason`).
+
+Two real traces, run against the live database with the network hard-blocked
+at the socket layer (stronger than physically disconnecting it — even
+loopback connects raise) to prove the zero-RPC claim:
+
+```
+python -m enrich trace --chain ethereum --address 0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc --hops 2 --direction out --max-fanout 300
+  trace #5: 502 edge(s) recorded, status=ok
+    not_ingested: 502 edge(s)
+```
+
+The Tornado.Cash pool's direct counterparties are almost entirely
+addresses we've never separately ingested — every one of those 502 edges
+is honestly marked `not_ingested`, not silently dropped.
+
+```
+python -m enrich trace --chain ethereum --address 0x0ee5067b06776a89ccc7dc8ee369984ad7db5e06 --hops 2 --direction both --max-fanout 400
+  trace #6: 439 edge(s) recorded, status=ok
+    hop_limit: 122 edge(s)
+    not_ingested: 277 edge(s)
+```
+
+This OFAC subject has 317 direct counterparties: 40 had further local
+activity of their own and expanded to 122 hop-2 edges (`hop_limit`); the
+other 277 had none beyond the edge that reached them and are marked
+`not_ingested` — verified directly against the data, not asserted.
+
+`expand` ranks a subject's direct counterparties by total native ETH value
+transferred (same methodology as the per-address counterparty ranking
+above — raw ETH only, no cross-asset conversion), excludes any already
+labelled `exchange` or `mixer`, prints the addresses it's about to ingest
+before making any RPC call, then calls the existing milestone-1 ingest for
+the top N.
+
+### Tests
+
+`pytest` — 39 tests, all offline. `tests/test_trace.py` covers each of the
+four termination reasons against fixture data, including a regression test
+for the `not_ingested`-vs-`both`-direction edge case above.

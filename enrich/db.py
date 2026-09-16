@@ -29,6 +29,38 @@ def set_is_contract(conn: sqlite3.Connection, address: str, is_contract: bool) -
     )
 
 
+def get_trace_run(conn: sqlite3.Connection, trace_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT chain_id, subject, hops, direction, min_value, started_at, finished_at, status, note "
+        "FROM trace_runs WHERE id = ?",
+        (trace_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    keys = ["chain_id", "subject", "hops", "direction", "min_value", "started_at", "finished_at", "status", "note"]
+    return dict(zip(keys, row))
+
+
+def get_trace_edges(conn: sqlite3.Connection, trace_id: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT hop, from_address, to_address, tx_hash, transfer_index, asset_address, amount_raw, terminal_reason
+        FROM trace_edges WHERE trace_id = ? ORDER BY hop, from_address, to_address
+        """,
+        (trace_id,),
+    ).fetchall()
+    keys = ["hop", "from_address", "to_address", "tx_hash", "transfer_index", "asset_address", "amount_raw", "terminal_reason"]
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def label_for(conn: sqlite3.Connection, chain_id: str, address: str) -> str:
+    row = conn.execute(
+        "SELECT label FROM labels WHERE chain_id = ? AND address = ? ORDER BY label LIMIT 1",
+        (chain_id, address),
+    ).fetchone()
+    return row[0] if row else "unknown"
+
+
 def label_coverage(conn: sqlite3.Connection) -> dict:
     total = conn.execute("SELECT COUNT(*) FROM addresses WHERE chain_id = 'ethereum'").fetchone()[0]
     labelled = conn.execute(
