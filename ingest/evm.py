@@ -25,8 +25,11 @@ ALCHEMY_URL = "https://eth-mainnet.g.alchemy.com/v2/{api_key}"
 # native ETH movements; the rest are token standards.
 TRANSFER_CATEGORIES = ["external", "internal", "erc20", "erc721", "erc1155"]
 
-MAX_RETRIES = 5
-INITIAL_BACKOFF_SECONDS = 1.0
+MAX_RETRIES = 5  # enough to ride out a short burst of free-tier rate limiting
+# without a single flaky call turning a whole address into a partial run.
+INITIAL_BACKOFF_SECONDS = 1.0  # doubles each retry (1s, 2s, 4s, 8s, 16s ~31s total) —
+# fast enough not to stall an interactive run, long enough that a real rate-limit
+# window usually clears before MAX_RETRIES is exhausted.
 
 
 class RateLimitExceeded(Exception):

@@ -357,9 +357,91 @@ the top N.
 
 ### Tests
 
-Still the same full-suite `pytest` run described in Milestone 1 above (66
-tests, all offline — milestone 2 added its share of them, milestone 3 has
-added more since). `tests/test_trace.py` covers each of the four
-termination reasons against fixture data, including a regression test for
-the `not_ingested`-vs-`both`-direction edge case above, and
+Still the same full-suite `pytest` run described in Milestone 1 above.
+`tests/test_trace.py` covers each of the four termination reasons against
+fixture data, including a regression test for the
+`not_ingested`-vs-`both`-direction edge case above, and
 `tests/test_expand.py` covers the window-anchoring fix described above.
+
+## Milestone 3: signals and the gate
+
+See [docs/milestone-3.md](docs/milestone-3.md) for the full spec.
+
+### Part A — signals
+
+`enrich/signals.py` computes five pure functions over a Case (subject,
+labels, trace edges — see `enrich/case.py`): `sanctioned_exposure`,
+`mixer_interaction`, `pass_through`, `counterparty_concentration`,
+`unlabelled_share`. Every signal reports `complete` and `gaps` scoped to
+exactly what it depends on, not the whole trace — a gap three hops away
+never marks a direct-transfer signal incomplete. `sanctioned_exposure`
+spans hop 1..N, so its completeness is reported per hop distance instead
+of one flat flag.
+
+### Part B — the gate
+
+```
+python -m gate assess --chain ethereum --address 0x... [--hops 2] [--max-fanout 50] [--format text|json] [--db data/casefile.db]
+python -m gate replay --verdict-id N
+```
+
+`gate/rules.py` has five rules — `subject_sanctioned`, `sanctioned_direct`,
+`sanctioned_indirect`, `mixer_outbound`, `rapid_pass_through` — each a pure
+function from Case to `{rule, outcome, reason, evidence, signal}`, no
+database, no network, testable with a hand-written dict. `subject_sanctioned`
+is a separate finding from `sanctioned_direct`/`sanctioned_indirect`: the
+subject's own label is never conflated with exposure to someone else's.
+
+**Interpretation policy**: a finding FLAGs regardless of gaps outside its
+own scope — a verified sanctioned transfer is a positive fact, and an
+un-ingested node elsewhere doesn't unfind it. Where gaps exist in the
+relevant scope, the reason says exposure may be greater than measured.
+Nothing found + scope complete → PASS. Nothing found + scope incomplete →
+UNKNOWN. This is fail-closed's actual shape here: the dangerous direction
+is claiming clean without having looked, never claiming flagged on
+evidence genuinely found.
+
+**Verdict**: any `FLAG` → `FLAGGED`, regardless of `UNKNOWN`s elsewhere.
+No `FLAG` and any `UNKNOWN` → `UNASSESSABLE`. No `FLAG` and all `PASS` →
+`CLEAR` — *unless* confidence is `low`, which forces `UNASSESSABLE`
+instead; `CLEAR` with `low` confidence is impossible by construction
+(enforced in `gate/verdict.py`, not left to chance).
+
+**Confidence** is a separate field on the verdict, not a rule — a
+statement about the case's evidence coverage, computed by
+`gate.rules.compute_confidence` and never competing with a finding for
+precedence: `{level: "low"|"high", reason, unlabelled_share,
+total_counterparties, hop1_gap_fraction}`.
+
+Verdicts are stored in a `verdicts` table with the full case and rule
+list as JSON, so `gate replay --verdict-id N` recomputes everything from
+stored evidence — zero database queries beyond loading that one row, zero
+network — and asserts the recomputed rules, confidence, and verdict are
+byte-identical to what was stored.
+
+### Thresholds
+
+Every named threshold/window/retry constant in the codebase, its value,
+and why. (Design constraint from `docs/milestone-3.md`: every one of
+these will be questioned by a reader, and none should require reading the
+code to find it.)
+
+| constant | file | value | reason |
+|---|---|---:|---|
+| `DEFAULT_BLOCKS` | `ingest/__main__.py` | 5000 | keeps free-tier Alchemy usage bounded; `addresses.txt` includes a Binance hot wallet with 551k lifetime transactions, and a much larger window would exhaust the free tier on a single address |
+| `MAX_RETRIES` | `ingest/evm.py` | 5 | enough to ride out a short burst of free-tier rate limiting without one flaky call turning an entire address into a partial run |
+| `INITIAL_BACKOFF_SECONDS` | `ingest/evm.py` | 1.0 | doubles each retry (1s, 2s, 4s, 8s, 16s, ~31s total) — fast enough not to stall an interactive run, long enough that a real rate-limit window usually clears before `MAX_RETRIES` is exhausted |
+| `DEFAULT_MAX_FANOUT` | `enrich/trace.py` | 50 | stops expansion through a busy intermediate node partway through a trace, bounding cost — an ordinary counterparty rarely has more than a few dozen of its own direct counterparties, and a node this "hot" is worth a dedicated look, not silent expansion. **Never applied to the subject itself** (hop 0) — a real subject (an OFAC-listed entity, an exchange wallet) can have thousands of direct counterparties, and capping the subject produced zero edges and turned every rule `UNKNOWN` the first time this was tried for real |
+| `PASS_THROUGH_WINDOW_BLOCKS` | `enrich/signals.py` | 100 (~20 min at ~12s/block) | catches same-session forwarding without treating unrelated later reuse of an address as pass-through |
+| `PASS_THROUGH_TOLERANCE_PCT` | `enrich/signals.py` | 0.05 (5%) | forwarded amount within 5% of received allows for the outbound leg being shaved by gas fees, without loosening enough to catch genuinely unrelated transfers of a similar size |
+| `UNLABELLED_MIN_SAMPLE` | `enrich/signals.py` | 10 | below this many direct counterparties, an unlabelled-share percentage is noise, not a confidence measure — 0% unlabelled over 2 counterparties says almost nothing about how well-labelled this subject's activity generally is |
+| `RAPID_PASS_THROUGH_MIN_MATCHES` | `gate/rules.py` | 1 | even a single received-then-forwarded match within the window/tolerance is a real pass-through event — layering typically shows as isolated instances per subject rather than a repeated pattern, so requiring more than one would miss the common case |
+| `UNASSESSABLE_UNLABELLED_THRESHOLD` | `gate/rules.py` | 0.5 (50%) | more than half of direct counterparties unlabelled means we cannot tell whether this subject mostly associates with clean or risky parties — the natural "we know less than we don't" cutoff |
+| `UNASSESSABLE_GAP_THRESHOLD` | `gate/rules.py` | 0.5 (50%) | same rationale as above, applied to trace coverage (hop-1 `not_ingested`/`fan_out_cap`) instead of label coverage |
+
+### Tests
+
+`pytest` — 95 tests, all offline. `tests/test_rules.py` is entirely
+hand-written dicts, no `ingest`/`enrich` imports, and includes a
+mechanical (AST-based, not substring-grep) check that `gate/rules.py`
+itself imports nothing from `ingest`, `enrich`, or `sqlite3`.

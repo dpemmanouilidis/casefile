@@ -13,7 +13,11 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 CUSTODY_CATEGORIES = {"exchange", "mixer"}
-DEFAULT_MAX_FANOUT = 50
+DEFAULT_MAX_FANOUT = 50  # stops expansion through a busy intermediate node partway
+# through a trace, bounding cost — an ordinary counterparty rarely has more than a
+# few dozen of its own direct counterparties; a node this "hot" is itself worth a
+# dedicated look rather than silently expanding into it. Never applied to the
+# subject itself (hop 0) — see run_trace's is_subject check.
 VALID_DIRECTIONS = {"out", "in", "both"}
 
 
