@@ -12,6 +12,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
+from enrich import signals as signals_mod
 from enrich import trace as trace_mod
 
 DEFAULT_HOPS = 2
@@ -89,7 +90,7 @@ def build_case(
 
     labels = {addr: _labels_for(conn, chain_id, addr) for addr in sorted(addresses)}
 
-    return {
+    case = {
         "chain_id": chain_id,
         "subject": subject,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -105,3 +106,8 @@ def build_case(
             "edges": edges,
         },
     }
+    # Signals are stored on the Case, not re-derived by gate/ — this is
+    # what lets gate/rules.py import nothing from enrich/ at all and stay
+    # callable with a hand-written dict.
+    case["signals"] = signals_mod.compute_all(case)
+    return case

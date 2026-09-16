@@ -161,6 +161,32 @@ def test_mixer_interaction_incomplete_only_on_its_own_hop1_gap():
     assert result["complete"] is False
 
 
+def test_hop1_scoped_signal_ignores_a_hop1_nodes_own_fan_out_cap_note():
+    """Regression: the trace run's free-text note can describe a hop-1
+    node's OWN fan_out_cap when it gets expanded toward hop 2 — that is a
+    hop-2 concern, not hop-1, and must not leak into a hop-1-only signal's
+    completeness just because the word "fan_out_cap" appears in the note.
+    """
+    case = make_case(
+        edges=[edge(1, SUBJECT, "0xhub", "0xtx1")],  # hop 1 itself is clean
+        labels={},
+        note="fan_out_cap at 0xhub: 999 distinct counterparties > --max-fanout 50",
+    )
+    result = signals.mixer_interaction(case)
+    assert result["complete"] is True
+    assert result["gaps"] == []
+
+
+def test_subject_level_fan_out_cap_note_does_leak_into_hop1_scope():
+    """The one case where the note DOES belong to hop 1: the subject
+    itself hit fan_out_cap, so the trace has zero edges at all.
+    """
+    case = make_case(edges=[], labels={}, note="fan_out_cap at 0xsubject: 999 distinct counterparties > --max-fanout 50")
+    result = signals.mixer_interaction(case)
+    assert result["complete"] is False
+    assert result["gaps"] == [case["trace"]["note"]]
+
+
 # --- pass_through ---
 
 def test_pass_through_matches_received_then_forwarded_within_window_and_tolerance():

@@ -91,11 +91,17 @@ def _gaps(case: dict, max_hop: int | None = None) -> list[str]:
 
     gaps = [f"{n} hop-{hop} node(s) {reason}" for (hop, reason), n in sorted(counts.items())]
 
-    # A fan_out_cap on the subject itself (hop 1, before any edges exist)
-    # leaves zero edges and only a run-level note — surface it the same way.
-    note = case["trace"].get("note")
-    if note and "fan_out_cap" in note:
-        gaps.append(note)
+    # A fan_out_cap on the subject itself leaves zero edges and only a
+    # run-level note — that specific case is always a hop-1 concern (it's
+    # the subject, expanding at hop 1), so it's safe to surface for any
+    # scope. The note can *also* describe a hop-1 node's own fan_out_cap
+    # when IT gets expanded toward hop 2+, which is not a hop-1 gap and
+    # must not leak into a hop-1-scoped signal — so this only applies when
+    # the trace produced no edges at all (the subject-itself case).
+    if not case["trace"]["edges"]:
+        note = case["trace"].get("note")
+        if note and "fan_out_cap" in note:
+            gaps.append(note)
     return gaps
 
 
