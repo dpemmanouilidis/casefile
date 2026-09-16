@@ -2,7 +2,10 @@
 
 A self-hosted agentic investigation pipeline for on-chain data. See
 [CLAUDE.md](CLAUDE.md) for the project's design rules and
-[docs/milestone-1.md](docs/milestone-1.md) for the current milestone spec.
+[docs/milestone-3.md](docs/milestone-3.md) for the current milestone spec
+(milestones 1 and 2, below, are done; see
+[docs/milestone-1.md](docs/milestone-1.md) and
+[docs/milestone-2.md](docs/milestone-2.md) for their specs).
 
 ## Milestone 1: ingest
 
@@ -12,14 +15,22 @@ schema, and writes them to a local SQLite database. Re-running the command is
 idempotent — no duplicate rows, no errors.
 
 ```
-python -m ingest --chain ethereum --addresses addresses.txt [--blocks 5000] [--dry-run] [--db data/casefile.db]
+python -m ingest --chain ethereum --addresses addresses.txt [--blocks 5000] [--from-block N --to-block N] [--dry-run] [--db data/casefile.db]
 ```
 
 - `addresses.txt` — one address per line, `#` comments allowed.
-- `--blocks N` — how many blocks of history to walk back from the current
-  chain head (default **5000**, not the 250000 in the original milestone
-  spec — `addresses.txt` includes a Binance hot wallet with 551k lifetime
-  transactions, and the larger window would exhaust the Alchemy free tier).
+- `--blocks N` — how many blocks of history to walk back from `--to-block`
+  or the current chain head (default **5000**, not the 250000 in the
+  original milestone spec — `addresses.txt` includes a Binance hot wallet
+  with 551k lifetime transactions, and the larger window would exhaust the
+  Alchemy free tier). This is still a chain-head-relative default — it has
+  not been changed to anchor to each subject's own activity. (`enrich
+  expand`, described below, does anchor its per-candidate windows to each
+  candidate's own last known block; that fix has not been carried back
+  into `ingest` itself.)
+- `--from-block` / `--to-block` — a fixed, reproducible block range,
+  overriding `--blocks`. `--to-block` alone still defaults to the current
+  chain head.
 - `--dry-run` — fetch and normalise, print counts, write nothing to disk.
 - `--db PATH` — SQLite file to write to (default `data/casefile.db`).
 
@@ -70,8 +81,10 @@ always written per address per run, whether or not it produced new data.
 pytest
 ```
 
-All 14 tests run offline against an in-memory fake JSON-RPC backend
-(`tests/fake_rpc.py`) — no test touches the network.
+`pytest` runs the whole repo's suite, not just milestone 1's — **66 tests**
+as of this writing (`pytest --collect-only -q`), all offline. Milestone
+1's own coverage runs against an in-memory fake JSON-RPC backend
+(`tests/fake_rpc.py`); no test in the suite touches the network.
 
 ### Known limitation
 
@@ -332,7 +345,9 @@ the top N.
 
 ### Tests
 
-`pytest` — 44 tests, all offline. `tests/test_trace.py` covers each of the
-four termination reasons against fixture data, including a regression test
-for the `not_ingested`-vs-`both`-direction edge case above, and
+Still the same full-suite `pytest` run described in Milestone 1 above (66
+tests, all offline — milestone 2 added its share of them, milestone 3 has
+added more since). `tests/test_trace.py` covers each of the four
+termination reasons against fixture data, including a regression test for
+the `not_ingested`-vs-`both`-direction edge case above, and
 `tests/test_expand.py` covers the window-anchoring fix described above.
