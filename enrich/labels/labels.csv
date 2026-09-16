@@ -1,0 +1,12 @@
+# hand-sourced labels for the nine addresses.txt subjects, 2026-09-16
+# provenance mirrors the comments already recorded in addresses.txt
+chain_id,address,label,category,source,retrieved
+ethereum,0x04dba1194ee10112fe6c3207c0687def0e78bacf,OFAC Blocked,sanctioned,etherscan.io/accounts/label/ofac-sanctioned,2026-09-16
+ethereum,0x0ee5067b06776a89ccc7dc8ee369984ad7db5e06,OFAC Blocked,sanctioned,etherscan.io/accounts/label/ofac-sanctioned,2026-09-16
+ethereum,0xe0f0cfde7ee664943906f17f7f14342e76a5cec7,Binance 12 (deprecated hot wallet),exchange,etherscan.io address label,2026-09-16
+ethereum,0x0003cec240a1ff499f3aea605fb277be87734040,Kraken deposit address,exchange,etherscan.io address label,2026-09-16
+ethereum,0xf977814e90da44bfa03b6295a0616a897441acec,Binance: Hot Wallet 20,exchange,etherscan.io/accounts (top ETH holders),2026-09-16
+ethereum,0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc,Tornado.Cash: 0.1 ETH pool,mixer,etherscan.io address label,2026-09-16
+ethereum,0xc0397d5f71200102ec9152473f58362f0290fc4d,control (unlabelled EOA),control,hand-picked from block ~25985933,2026-09-16
+ethereum,0xfc908d18f854f93a3b6423226c79334a0947cbfd,control (unlabelled EOA),control,hand-picked from block ~25985933,2026-09-16
+ethereum,0x9f5dd7e34d5ae6a27896a9e1b209f0c22da8aa0d,control (unlabelled EOA),control,hand-picked from block ~25985933,2026-09-16

@@ -198,3 +198,7 @@ class AlchemyClient:
                 status=status,
                 method_id=method_id,
             )
+
+    def is_contract(self, address: str) -> bool:
+        code = self._rpc("eth_getCode", [address, "latest"])
+        return code is not None and code != "0x"

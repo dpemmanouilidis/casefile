@@ -3,6 +3,18 @@ from tests.conftest import ADDRESS, COUNTERPARTY, TOKEN, TX_HASH_ERC20, TX_HASH_
 from tests.fake_rpc import FakeSession
 
 
+def test_is_contract_true_for_nonempty_code(fake_session):
+    fake_session._handlers["eth_getCode"] = lambda params: "0x6001600101"
+    client = AlchemyClient(api_key="test-key", session=fake_session, sleep=lambda _s: None)
+    assert client.is_contract(COUNTERPARTY) is True
+
+
+def test_is_contract_false_for_empty_code(fake_session):
+    fake_session._handlers["eth_getCode"] = lambda params: "0x"
+    client = AlchemyClient(api_key="test-key", session=fake_session, sleep=lambda _s: None)
+    assert client.is_contract(ADDRESS) is False
+
+
 def test_transactions_normalises_native_and_erc20(client):
     txs = {tx.tx_hash: tx for tx in client.transactions(ADDRESS, 0, 200)}
 
