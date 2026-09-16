@@ -228,23 +228,28 @@ def rapid_pass_through(case: dict) -> dict:
     )
 
 
-def unassessable(case: dict) -> dict:
-    """Fires as FLAG on the case itself, not the subject: the evidence is
-    too thin to judge, which is a finding in itself. Never UNKNOWN — that
-    would be circular (unknown whether we know enough to know).
+def compute_confidence(case: dict) -> dict:
+    """A statement about the case's evidence coverage, not a finding about
+    the subject — kept off the rule list entirely so it never competes
+    with an actual finding for the verdict. A verdict computed from a case
+    with `low` confidence is still the honest, useful output: `FLAGGED`
+    with low confidence tells an analyst both what was found and how much
+    to trust the completeness of the picture around it. `CLEAR` with low
+    confidence must be impossible by construction — that combination is
+    exactly what an UNKNOWN rule outcome exists to prevent (see
+    verdict.compute_verdict).
     """
-    subject = case["subject"]
     unlab = _signal(case, "unlabelled_share")
     sufficient = unlab["value"]["sufficient_sample"]
     share = unlab["value"]["unlabelled_share"]
     total = unlab["value"]["total_counterparties"]
 
-    subject_side_addrs = {subject}
     counterparty_gap: dict[str, str | None] = {}
     for e in case["trace"]["edges"]:
         if e["hop"] != 1:
             continue
-        cp = e["to_address"] if e["from_address"] in subject_side_addrs else e["from_address"]
+        subject = case["subject"]
+        cp = e["to_address"] if e["from_address"] == subject else e["from_address"]
         if e["terminal_reason"] in {"not_ingested", "fan_out_cap"}:
             counterparty_gap[cp] = e["terminal_reason"]
         else:
@@ -262,17 +267,13 @@ def unassessable(case: dict) -> dict:
     if gap_fraction > UNASSESSABLE_GAP_THRESHOLD:
         findings.append(f"{gap_fraction:.0%} of hop-1 nodes not_ingested/fan_out_cap (> {UNASSESSABLE_GAP_THRESHOLD:.0%})")
 
-    if findings:
-        return _reason(
-            "unassessable", "FLAG",
-            "evidence too thin to judge this case: " + "; ".join(findings),
-            evidence=[subject], signal="unlabelled_share",
-        )
-    return _reason(
-        "unassessable", "PASS",
-        "sufficient direct-counterparty coverage and labelling to assess this case",
-        evidence=[], signal="unlabelled_share",
-    )
+    return {
+        "level": "low" if findings else "high",
+        "reason": "; ".join(findings) if findings else "sufficient direct-counterparty coverage and labelling",
+        "unlabelled_share": share,
+        "total_counterparties": total,
+        "hop1_gap_fraction": gap_fraction,
+    }
 
 
 ALL_RULES = [
@@ -281,7 +282,6 @@ ALL_RULES = [
     sanctioned_indirect,
     mixer_outbound,
     rapid_pass_through,
-    unassessable,
 ]
 
 

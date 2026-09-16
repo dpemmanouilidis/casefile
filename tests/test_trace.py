@@ -109,7 +109,25 @@ def test_fan_out_cap_marks_the_incoming_edge_and_does_not_expand_further(tmp_pat
 
     run = db.get_trace_run(conn, trace_id)
     assert "fan_out_cap" in run["note"]
-    assert "5" in run["note"]
+
+
+def test_fan_out_cap_never_applies_to_the_subject_itself(tmp_path):
+    """The cap stops expansion through a busy intermediate node, not the
+    trace before it even starts. A subject with more direct counterparties
+    than --max-fanout (e.g. a real exchange hot wallet) must still expand
+    at hop 1 rather than immediately hitting fan_out_cap with zero edges.
+    """
+    conn = make_db(tmp_path)
+    for i in range(5):
+        add_transfer(conn, f"0x{i:064x}", "s", f"leaf{i}")
+
+    trace_id = trace.run_trace(conn, CHAIN, "s", hops=1, direction="out", max_fanout=2)
+    edges = db.get_trace_edges(conn, trace_id)
+
+    assert len(edges) == 5
+    assert all(e["terminal_reason"] == "hop_limit" for e in edges)
+    run = db.get_trace_run(conn, trace_id)
+    assert run["note"] is None
 
 
 def test_direction_in_only_follows_incoming_transfers(tmp_path):

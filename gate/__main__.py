@@ -7,24 +7,21 @@ import sys
 
 from enrich import case as case_mod
 from enrich import db as enrich_db
+from enrich import trace as trace_mod
 from gate import db as gate_db
 from gate import verdict as verdict_mod
 
 DEFAULT_DB_PATH = "data/casefile.db"
 DEFAULT_HOPS = 2
-ASSESS_DEFAULT_MAX_FANOUT = 500  # enrich.trace's own default (50) is tuned for
-# interactive display, not assessment — a real subject (an OFAC-listed entity,
-# a mixer) can have hundreds of direct counterparties, and hitting the cap on
-# the SUBJECT itself produces zero edges and turns every rule UNKNOWN instead
-# of finding exposure we actually have the data for. 500 comfortably covers
-# every subject seen in this dataset so far (largest observed: 280).
 
 
 def _print_verdict(verdict: dict, fmt: str) -> None:
     if fmt == "json":
         print(json.dumps(verdict, indent=2))
         return
-    print(f"subject={verdict['subject']} verdict={verdict['verdict']} case_id={verdict['case_id']}")
+    confidence = verdict["confidence"]
+    print(f"subject={verdict['subject']} verdict={verdict['verdict']} confidence={confidence['level']} case_id={verdict['case_id']}")
+    print(f"  confidence reason: {confidence['reason']}")
     for r in verdict["rules"]:
         print(f"  [{r['outcome']:7}] {r['rule']}: {r['reason']}")
         if r["evidence"]:
@@ -58,12 +55,15 @@ def cmd_replay(args: argparse.Namespace) -> int:
         return 1
 
     recomputed = verdict_mod.assess(stored["case"], case_id=stored["case_id"])
-    stored_rules_for_compare = stored["rules"]
-    recomputed_rules_for_compare = recomputed["rules"]
 
-    identical = recomputed_rules_for_compare == stored_rules_for_compare and recomputed["verdict"] == stored["verdict"]
+    rules_match = recomputed["rules"] == stored["rules"]
+    confidence_match = recomputed["confidence"] == stored["confidence"]
+    verdict_match = recomputed["verdict"] == stored["verdict"]
+    identical = rules_match and confidence_match and verdict_match
+
     print(f"verdict #{args.verdict_id}: stored={stored['verdict']} recomputed={recomputed['verdict']}")
-    print("rules identical:" , recomputed_rules_for_compare == stored_rules_for_compare)
+    print(f"  stored confidence={stored['confidence']['level']} recomputed confidence={recomputed['confidence']['level']}")
+    print(f"rules identical: {rules_match}, confidence identical: {confidence_match}")
     print("REPRODUCED" if identical else "MISMATCH — not reproducible from stored evidence")
 
     conn.close()
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     p_assess.add_argument("--chain", required=True, choices=["ethereum"])
     p_assess.add_argument("--address", required=True)
     p_assess.add_argument("--hops", type=int, default=DEFAULT_HOPS)
-    p_assess.add_argument("--max-fanout", type=int, default=ASSESS_DEFAULT_MAX_FANOUT)
+    p_assess.add_argument("--max-fanout", type=int, default=trace_mod.DEFAULT_MAX_FANOUT)
     p_assess.add_argument("--format", choices=["text", "json"], default="text")
     p_assess.add_argument("--db", default=DEFAULT_DB_PATH)
     p_assess.set_defaults(func=cmd_assess)

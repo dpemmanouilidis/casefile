@@ -107,7 +107,13 @@ def run_trace(
                     continue
 
                 counterparties = {(to_a if from_a == node else from_a) for _, _, from_a, to_a, _, _ in rows}
-                if len(counterparties) > max_fanout:
+                # The cap exists to stop expansion through a busy
+                # intermediate node, not to give up on the subject before
+                # the trace even starts — a subject with thousands of
+                # counterparties (Binance 12) is exactly the case tracing
+                # exists to handle, and exempting only hop 0 keeps the cap
+                # meaningful everywhere it's actually needed.
+                if len(counterparties) > max_fanout and not is_subject:
                     if incoming_keys:
                         _mark_edges(conn, trace_id, incoming_keys, "fan_out_cap")
                     notes.append(

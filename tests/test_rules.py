@@ -188,71 +188,78 @@ def test_rapid_pass_through_passes_when_zero_and_complete():
     assert result["outcome"] == "PASS"
 
 
-# --- unassessable ---
+# --- compute_confidence ---
+# unassessable is no longer a rule: it's a statement about the case
+# (confidence), kept off the rule list so it never competes with a
+# finding. See gate/verdict.py for how it still forces UNASSESSABLE
+# on an otherwise-CLEAR verdict.
 
-def test_unassessable_flags_on_tiny_sample():
+def test_confidence_low_on_tiny_sample():
     case = make_case(
         edges=[edge(1, SUBJECT, "0xa", "0xtx1")],
         signals=[unlabelled_signal(share=0.0, total=1, sufficient=False)],
     )
-    result = rules.unassessable(case)
-    assert result["outcome"] == "FLAG"
+    result = rules.compute_confidence(case)
+    assert result["level"] == "low"
     assert "minimum sample" in result["reason"]
 
 
-def test_unassessable_flags_on_majority_unlabelled():
+def test_confidence_low_on_majority_unlabelled():
     case = make_case(
         edges=[edge(1, SUBJECT, f"0x{i}", f"0xtx{i}") for i in range(20)],
         signals=[unlabelled_signal(share=0.8, total=20, sufficient=True)],
     )
-    result = rules.unassessable(case)
-    assert result["outcome"] == "FLAG"
+    result = rules.compute_confidence(case)
+    assert result["level"] == "low"
 
 
-def test_unassessable_flags_on_majority_not_ingested():
+def test_confidence_low_on_majority_not_ingested():
     edges = [edge(1, SUBJECT, f"0x{i}", f"0xtx{i}", terminal_reason="not_ingested") for i in range(15)]
     edges += [edge(1, SUBJECT, f"0xok{i}", f"0xtxok{i}") for i in range(5)]
     case = make_case(edges=edges, signals=[unlabelled_signal(share=0.0, total=20, sufficient=True)])
-    result = rules.unassessable(case)
-    assert result["outcome"] == "FLAG"
+    result = rules.compute_confidence(case)
+    assert result["level"] == "low"
     assert "not_ingested" in result["reason"]
 
 
-def test_unassessable_passes_with_good_coverage():
+def test_confidence_high_with_good_coverage():
     edges = [edge(1, SUBJECT, f"0x{i}", f"0xtx{i}") for i in range(20)]
     case = make_case(edges=edges, signals=[unlabelled_signal(share=0.1, total=20, sufficient=True)])
-    result = rules.unassessable(case)
-    assert result["outcome"] == "PASS"
+    result = rules.compute_confidence(case)
+    assert result["level"] == "high"
 
 
 # --- verdict ---
 
-def test_verdict_clear_when_every_rule_passes():
+def test_verdict_clear_when_every_rule_passes_and_confidence_is_high():
     rule_results = [{"rule": r, "outcome": "PASS", "reason": "", "evidence": [], "signal": None} for r in
-                    ["subject_sanctioned", "sanctioned_direct", "sanctioned_indirect", "mixer_outbound", "rapid_pass_through", "unassessable"]]
-    assert verdict.compute_verdict(rule_results) == "CLEAR"
+                    ["subject_sanctioned", "sanctioned_direct", "sanctioned_indirect", "mixer_outbound", "rapid_pass_through"]]
+    assert verdict.compute_verdict(rule_results, {"level": "high"}) == "CLEAR"
 
 
 def test_verdict_unassessable_on_single_unknown():
     rule_results = [{"rule": "subject_sanctioned", "outcome": "PASS", "reason": "", "evidence": [], "signal": None},
                     {"rule": "sanctioned_direct", "outcome": "UNKNOWN", "reason": "", "evidence": [], "signal": None}]
-    assert verdict.compute_verdict(rule_results) == "UNASSESSABLE"
+    assert verdict.compute_verdict(rule_results, {"level": "high"}) == "UNASSESSABLE"
 
 
-def test_verdict_flagged_on_a_finding_with_no_unknowns():
-    rule_results = [{"rule": "subject_sanctioned", "outcome": "PASS", "reason": "", "evidence": [], "signal": None},
-                    {"rule": "sanctioned_direct", "outcome": "FLAG", "reason": "", "evidence": [], "signal": None}]
-    assert verdict.compute_verdict(rule_results) == "FLAGGED"
-
-
-def test_verdict_unassessable_rule_flag_overrides_flagged():
-    """unassessable firing FLAG means 'the case can't be judged', which
-    must never read as FLAGGED ('the subject did something') even if
-    another rule also happens to fire.
+def test_verdict_flagged_on_a_finding_regardless_of_unknowns_or_gaps():
+    """The core of this correction: any FLAG means FLAGGED, full stop —
+    a verified finding is not weakened by an UNKNOWN elsewhere in the case.
     """
-    rule_results = [{"rule": "sanctioned_direct", "outcome": "FLAG", "reason": "", "evidence": [], "signal": None},
-                    {"rule": "unassessable", "outcome": "FLAG", "reason": "", "evidence": [], "signal": None}]
-    assert verdict.compute_verdict(rule_results) == "UNASSESSABLE"
+    rule_results = [{"rule": "subject_sanctioned", "outcome": "UNKNOWN", "reason": "", "evidence": [], "signal": None},
+                    {"rule": "sanctioned_direct", "outcome": "FLAG", "reason": "", "evidence": [], "signal": None}]
+    assert verdict.compute_verdict(rule_results, {"level": "low"}) == "FLAGGED"
+
+
+def test_verdict_clear_with_low_confidence_is_impossible():
+    """The invariant this correction adds: CLEAR + low confidence must
+    never happen, regardless of what the individual rules concluded —
+    that combination is exactly what UNKNOWN exists to prevent.
+    """
+    rule_results = [{"rule": r, "outcome": "PASS", "reason": "", "evidence": [], "signal": None} for r in
+                    ["subject_sanctioned", "sanctioned_direct", "sanctioned_indirect", "mixer_outbound", "rapid_pass_through"]]
+    assert verdict.compute_verdict(rule_results, {"level": "low"}) == "UNASSESSABLE"
 
 
 def test_rules_module_imports_nothing_from_ingest_or_enrich():

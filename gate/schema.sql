@@ -4,8 +4,10 @@ CREATE TABLE IF NOT EXISTS verdicts (
     subject      TEXT NOT NULL,
     verdict      TEXT NOT NULL,
     case_id      INTEGER NOT NULL,      -- trace_id the case was built from
-    case_json    TEXT NOT NULL,         -- the full Case, so a verdict is reproducible offline
-    rules_json   TEXT NOT NULL,         -- the full rule list, including PASS and UNKNOWN
+    case_json       TEXT NOT NULL,      -- the full Case, so a verdict is reproducible offline
+    rules_json      TEXT NOT NULL,      -- the full rule list, including PASS and UNKNOWN
+    confidence_json TEXT NOT NULL,      -- {level, reason, coverage numbers} — a statement
+                                         -- about the case, never a rule outcome
     generated_at TEXT NOT NULL
 );
 
