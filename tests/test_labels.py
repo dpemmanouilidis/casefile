@@ -169,3 +169,57 @@ def test_label_coverage_counts_labelled_and_unknown(tmp_path):
 
     coverage = db.label_coverage(conn)
     assert coverage == {"total_addresses": 2, "labelled": 1, "unknown": 1}
+
+
+def test_is_bulk_tier_file_detects_by_header(tmp_path):
+    standard = tmp_path / "standard.csv"
+    write_csv(standard, "chain_id,address,label,category,source,retrieved\n")
+    bulk = tmp_path / "bulk.csv"
+    write_csv(bulk, "chain_id,address,entity,source,retrieved\n")
+
+    assert labels.is_bulk_tier_file(standard) is False
+    assert labels.is_bulk_tier_file(bulk) is True
+
+
+def test_load_entity_categories_rejects_malformed_category(tmp_path):
+    path = tmp_path / "entity_categories.csv"
+    write_csv(path, "entity,category\nbinance,not-a-category\n")
+    with pytest.raises(labels.MalformedLabelFile):
+        labels.load_entity_categories(path)
+
+
+def test_bulk_tier_resolves_category_from_entity_mapping_and_defaults_to_unknown(tmp_path):
+    bulk_path = tmp_path / "bulk.csv"
+    write_csv(
+        bulk_path,
+        "chain_id,address,entity,source,retrieved\n"
+        "ethereum,0xaaaa000000000000000000000000000000000a,binance,third-party-scrape,2026-09-16\n"
+        "ethereum,0xbbbb000000000000000000000000000000000b,some-unmapped-defi-protocol,third-party-scrape,2026-09-16\n",
+    )
+    entity_categories = {"binance": "exchange"}
+
+    rows = labels.load_bulk_label_file(bulk_path, entity_categories)
+    by_address = {r.address: r for r in rows}
+
+    assert by_address["0xaaaa000000000000000000000000000000000a"].category == "exchange"
+    assert by_address["0xbbbb000000000000000000000000000000000b"].category == "unknown"
+
+
+def test_bulk_tier_is_idempotent_and_reflects_updated_mapping_on_reload(tmp_path):
+    bulk_path = tmp_path / "bulk.csv"
+    write_csv(
+        bulk_path,
+        "chain_id,address,entity,source,retrieved\n"
+        "ethereum,0xaaaa000000000000000000000000000000000a,binance,third-party-scrape,2026-09-16\n",
+    )
+    conn = connect(tmp_path)
+
+    labels.load_bulk_labels_into_db(conn, bulk_path, {})
+    row = conn.execute("SELECT category FROM labels").fetchone()
+    assert row[0] == "unknown"
+
+    # editing the mapping and reloading (not regenerating the bulk file)
+    # is how a mapping decision takes effect
+    labels.load_bulk_labels_into_db(conn, bulk_path, {"binance": "exchange"})
+    rows = conn.execute("SELECT category FROM labels").fetchall()
+    assert rows == [("exchange",)]  # replaced, not duplicated

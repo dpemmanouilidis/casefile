@@ -13,6 +13,7 @@ from ingest.evm import AlchemyClient
 
 DEFAULT_DB_PATH = "data/casefile.db"
 DEFAULT_LABELS_DIR = "enrich/labels"
+ENTITY_CATEGORIES_FILENAME = "entity_categories.csv"
 
 
 def cmd_load_labels(args: argparse.Namespace) -> int:
@@ -20,18 +21,32 @@ def cmd_load_labels(args: argparse.Namespace) -> int:
     db.ensure_schema(conn)
 
     label_dir = Path(args.dir)
-    files = sorted(label_dir.glob("*.csv"))
+    entity_categories_path = label_dir / ENTITY_CATEGORIES_FILENAME
+    entity_categories: dict[str, str] = {}
+    if entity_categories_path.exists():
+        try:
+            entity_categories = labels.load_entity_categories(entity_categories_path)
+        except labels.MalformedLabelFile as exc:
+            print(f"REJECTED {entity_categories_path}: {exc}", file=sys.stderr)
+            return 1
+
+    files = sorted(p for p in label_dir.glob("*.csv") if p.name != ENTITY_CATEGORIES_FILENAME)
     if not files:
-        print(f"no *.csv files found under {label_dir}", file=sys.stderr)
+        print(f"no *.csv label files found under {label_dir}", file=sys.stderr)
         return 1
 
     for path in files:
         try:
-            written, replaced = labels.load_labels_into_db(conn, path)
+            if labels.is_bulk_tier_file(path):
+                written, replaced = labels.load_bulk_labels_into_db(conn, path, entity_categories)
+                tier = "bulk"
+            else:
+                written, replaced = labels.load_labels_into_db(conn, path)
+                tier = "standard"
         except labels.MalformedLabelFile as exc:
             print(f"REJECTED {path}: {exc}", file=sys.stderr)
             return 1
-        print(f"  {path}: {written} label(s) loaded ({replaced} prior row(s) from this file's source(s) replaced)")
+        print(f"  {path} [{tier}]: {written} label(s) loaded ({replaced} prior row(s) from this file's source(s) replaced)")
 
     coverage = db.label_coverage(conn)
     print(f"label coverage: {coverage['labelled']}/{coverage['total_addresses']} addresses labelled, {coverage['unknown']} unknown")

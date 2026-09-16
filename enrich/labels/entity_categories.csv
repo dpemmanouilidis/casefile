@@ -1,0 +1,13 @@
+# hand-maintained mapping: etherscan-labels bulk entity name -> our closed category set
+# scope for this round: only entities that actually appeared in the top-50-by-fan-out
+# join against the local database (see the session record / commit message for the
+# full join table). Anything not listed here resolves to 'unknown' at load time.
+# Deliberately left OUT as ambiguous or out of scope for this round (do not add
+# without discussion): old-contract, blocked, stablecoin, ofac-sanctions-lists, dex
+# (dex: a DEX router is not a custody change in the AML sense that terminal_reason
+# is for — a swap stays fully on-chain and traceable, unlike a CEX or mixer).
+entity,category
+binance,exchange
+bitfinex,exchange
+kraken,exchange
+tornado-cash,mixer

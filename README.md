@@ -156,27 +156,69 @@ python -m enrich load-labels [--dir enrich/labels] [--db data/casefile.db]
 python -m enrich compute-is-contract [--db data/casefile.db]
 ```
 
-`load-labels` reads every `*.csv` under `enrich/labels/` (currently
-[labels.csv](enrich/labels/labels.csv), the nine `addresses.txt` subjects,
-and [ofac_sdn_eth.csv](enrich/labels/ofac_sdn_eth.csv), 120 Ethereum
-addresses extracted from Treasury's official SDN Advanced XML export — a
-one-time bulk download, not scraped; see the file's header for provenance
-and [scripts/extract_ofac_eth.py](scripts/extract_ofac_eth.py) for the
-extraction). A malformed `category` rejects the whole file before writing
-anything (rule 3, fail closed) rather than writing the good rows ahead of
-the bad one. Loading is idempotent per file: re-running a file replaces
-exactly the rows whose `source` it declares and leaves every other file's
-rows untouched, so a row removed from a CSV disappears on the next load
-instead of accumulating.
+`load-labels` reads every `*.csv` under `enrich/labels/`, in two distinct
+tiers:
+
+- **Standard tier** (`chain_id,address,label,category,source,retrieved`) —
+  hand-sourced, high confidence, category baked into the file itself:
+  [labels.csv](enrich/labels/labels.csv) (the nine `addresses.txt`
+  subjects) and [ofac_sdn_eth.csv](enrich/labels/ofac_sdn_eth.csv) (120
+  Ethereum addresses extracted from Treasury's official SDN Advanced XML
+  export — a one-time bulk download, not scraped; see the file's header
+  and [scripts/extract_ofac_eth.py](scripts/extract_ofac_eth.py)).
+- **Bulk tier** (`chain_id,address,entity,source,retrieved` — no
+  `category` column) —
+  [etherscan_labels_bulk.csv](enrich/labels/etherscan_labels_bulk.csv),
+  24,859 addresses across all ~420 per-entity CSVs from
+  [github.com/brianleect/etherscan-labels](https://github.com/brianleect/etherscan-labels)
+  (commit `923aba7`, third-party Etherscan scrape, **unverified**; see the
+  file's header). This tier carries an `entity` name, not a category —
+  category is resolved at *load time* against
+  [entity_categories.csv](enrich/labels/entity_categories.csv), a small
+  hand-maintained mapping. An entity with no mapping resolves to
+  `unknown`, never a guess, so a `custody_change` in tracing (below) can
+  only ever fire on an entity someone deliberately classified.
+
+Both tiers detect automatically by header shape (`is_bulk_tier_file`), so
+`load-labels` needs no flag to tell them apart. A malformed `category`
+(in either the standard file or `entity_categories.csv`) rejects the whole
+file before writing anything (rule 3, fail closed) rather than writing the
+good rows ahead of the bad one. Loading is idempotent per file: re-running
+a file replaces exactly the rows whose `source` it declares and leaves
+every other file's rows untouched — for the bulk tier this also means
+editing `entity_categories.csv` and reloading is how a new classification
+decision takes effect, with no need to regenerate the 25k-row bulk file.
+
+**How `entity_categories.csv` gets populated**: not by classifying ~420
+entities blind. Ranked the database's counterparties by fan-out (distinct
+local counterparties, not value — value is the wrong signal for finding
+custody boundaries; a mixer or exchange is identifiable by how many
+different addresses converge on it, not by transaction size) and joined
+the top 50 against the bulk file, mapping only entities that actually
+showed up: `binance`, `bitfinex`, `kraken` → `exchange`, `tornado-cash` →
+`mixer`. Left `old-contract`, `blocked`, `stablecoin`,
+`ofac-sanctions-lists`, and `dex` unmapped — `dex` in particular is a
+deliberate exclusion, not an oversight: a DEX router swap stays fully
+on-chain and traceable, which is not what `custody_change` exists to flag
+(a CEX or mixer breaks the on-chain link; a DEX doesn't).
 
 `compute-is-contract` sets `addresses.is_contract` via `eth_getCode`,
 one RPC call per address that doesn't have it set yet (0 calls on a
 re-run).
 
-Real run: **12/2736 addresses labelled, 2724 unknown** — a thin seed, as
-expected before the top-25-counterparty labelling round is folded in.
-217/2736 addresses are contracts (2736 `eth_getCode` calls on the first
-run, 0 on re-run).
+Real run: **30/2736 addresses labelled, 2706 unknown** (idempotent — a
+second `load-labels` run reports the same numbers). 217/2736 addresses
+are contracts (2736 `eth_getCode` calls on the first run, 0 on re-run).
+
+Of the top 50 counterparties by fan-out, **9/50 now carry a label**
+(6 `exchange`, 1 `mixer`, 3 `unknown` from the deliberately-unmapped
+entities above). The number that actually matters for tracing: re-running
+the OFAC-subject trace from the tracing section below picked up **2
+hop-1 edges newly marked `custody_change`** (both into the
+now-Kraken-labelled `0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0`) that
+previously would have been silently traced through as ordinary
+counterparties — exactly the false-continuation failure mode this
+labelling round exists to close.
 
 ### Part B — tracing
 
@@ -218,7 +260,7 @@ loopback connects raise) to prove the zero-RPC claim:
 
 ```
 python -m enrich trace --chain ethereum --address 0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc --hops 2 --direction out --max-fanout 300
-  trace #5: 502 edge(s) recorded, status=ok
+  trace #8: 502 edge(s) recorded, status=ok
     not_ingested: 502 edge(s)
 ```
 
@@ -228,15 +270,22 @@ is honestly marked `not_ingested`, not silently dropped.
 
 ```
 python -m enrich trace --chain ethereum --address 0x0ee5067b06776a89ccc7dc8ee369984ad7db5e06 --hops 2 --direction both --max-fanout 400
-  trace #6: 439 edge(s) recorded, status=ok
-    hop_limit: 122 edge(s)
+  trace #9: 388 edge(s) recorded, status=ok
+    custody_change: 2 edge(s)
+    hop_limit: 71 edge(s)
     not_ingested: 277 edge(s)
 ```
 
-This OFAC subject has 317 direct counterparties: 40 had further local
-activity of their own and expanded to 122 hop-2 edges (`hop_limit`); the
-other 277 had none beyond the edge that reached them and are marked
-`not_ingested` — verified directly against the data, not asserted.
+This OFAC subject has 317 direct counterparties: 2 edges (both into the
+now-Kraken-labelled `0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0`) stop
+with `custody_change` and are correctly *not* traced further; 38 other
+counterparties had further local activity of their own and expanded to 71
+hop-2 edges (`hop_limit`); the remaining 277 had no activity beyond the
+edge that reached them and are marked `not_ingested` — verified directly
+against the data, not asserted. Before the exchange labels were loaded,
+those 2 edges were counted under `hop_limit` instead — traced through as
+ordinary counterparties, a real false continuation past a custody
+boundary.
 
 `expand` ranks a subject's direct counterparties by total native ETH value
 transferred (same methodology as the per-address counterparty ranking
