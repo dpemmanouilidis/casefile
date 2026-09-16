@@ -3,10 +3,16 @@ signal is a pure function: Case in, signal dict out. No I/O, no network —
 same discipline gate/ needs, one layer earlier, since a signal is exactly
 the kind of thing a gate rule consumes without re-deriving.
 
-Every signal returns a value AND a completeness marker. A signal computed
-over a trace containing not_ingested or fan_out_cap nodes is incomplete,
-and says so explicitly rather than silently reporting "no exposure found"
-when the honest answer is "exposure not measurable" (rule 3, fail closed).
+Every signal returns a value AND a completeness marker, scoped to exactly
+what that signal depends on — not the whole trace. mixer_interaction,
+pass_through, counterparty_concentration and unlabelled_share are facts
+about the subject's own direct transfers, so a gap three hops away never
+marks them incomplete. sanctioned_exposure spans hop 1..N, so its
+completeness is reported per hop distance instead of one flat flag:
+hop-1 exposure can be complete while hop-2 is not. A signal (or hop) that
+touches a not_ingested or fan_out_cap node within its own scope reports
+incomplete rather than silently reporting "no exposure found" when the
+honest answer is "exposure not measurable" (rule 3, fail closed).
 
 Thresholds and windows used here are named constants with the reasoning
 in a comment, per the milestone-3 design constraint: every one of them
@@ -26,6 +32,12 @@ PASS_THROUGH_WINDOW_BLOCKS = 100  # ~20 minutes at ~12s/block: catches same-sess
 PASS_THROUGH_TOLERANCE_PCT = 0.05  # forwarded amount within 5% of received: allows
 # for the outbound leg being shaved by gas fees without loosening enough to catch
 # genuinely unrelated transfers of a similar size.
+
+UNLABELLED_MIN_SAMPLE = 10  # below this many direct counterparties, an unlabelled-
+# share percentage is noise, not a confidence measure: 0% unlabelled over 2
+# counterparties says almost nothing about how well-labelled this subject's
+# activity generally is. Below the threshold the signal reports itself
+# incomplete rather than let a tiny sample read as high confidence.
 
 
 def _categories_of(case: dict, address: str) -> set[str]:
@@ -93,11 +105,19 @@ def sanctioned_exposure(case: dict) -> dict:
     native ETH for the numeric total — comparing raw units across assets
     without a price would be inventing a fact not in the evidence (same
     convention used throughout ingest/enrich for value ranking).
+
+    Completeness is reported per hop distance, not as one flat flag for
+    the whole trace: a not_ingested node three hops away says nothing
+    about whether we saw everything at hop 1. Hop-N completeness is
+    cumulative over hops 1..N (a gap anywhere along the path to hop N
+    hides whatever might lie beyond it), so hop-1 can be complete while
+    hop-2 is not, but hop-2 can never be complete while hop-1 isn't.
     """
     subject = case["subject"]
     touches = []
     received_raw = 0
     sent_raw = 0
+    max_hop = max((e["hop"] for e in case["trace"]["edges"]), default=0)
 
     for edge, counterparty in _edges_with_counterparty(case):
         if counterparty == subject:
@@ -123,7 +143,8 @@ def sanctioned_exposure(case: dict) -> dict:
                 received_raw += amount  # subject received value a sanctioned node sent
 
     evidence = sorted({t["tx_hash"] for t in touches} | {t["address"] for t in touches})
-    gaps = _gaps(case)
+    complete_by_hop = {f"hop_{h}": len(_gaps(case, max_hop=h)) == 0 for h in range(1, max_hop + 1)}
+    gaps_by_hop = {f"hop_{h}": _gaps(case, max_hop=h) for h in range(1, max_hop + 1)}
     return {
         "name": "sanctioned_exposure",
         "value": {
@@ -131,8 +152,8 @@ def sanctioned_exposure(case: dict) -> dict:
             "sent_to_sanctioned_raw_eth": str(sent_raw),
             "touches": touches,
         },
-        "complete": len(gaps) == 0,
-        "gaps": gaps,
+        "complete": complete_by_hop,
+        "gaps": gaps_by_hop,
         "evidence": evidence,
     }
 
@@ -141,11 +162,20 @@ def mixer_interaction(case: dict) -> dict:
     """Transfers to or from any address labelled `mixer`, with direction
     and count. Direction matters: receiving from a mixer and sending to
     one are different facts.
+
+    Scoped to direct transfers (hop 1) only — a fact about the subject's
+    own behaviour, like pass_through and counterparty_concentration below
+    — so its completeness depends only on the subject's own transfers
+    being ingested, regardless of gaps further out in the trace.
     """
+    subject = case["subject"]
     sent_to_mixer = []
     received_from_mixer = []
 
-    for edge, counterparty in _edges_with_counterparty(case):
+    for edge in case["trace"]["edges"]:
+        if edge["hop"] != 1:
+            continue
+        counterparty = edge["to_address"] if edge["from_address"] == subject else edge["from_address"]
         if "mixer" not in _categories_of(case, counterparty):
             continue
         if edge["to_address"] == counterparty:
@@ -154,7 +184,7 @@ def mixer_interaction(case: dict) -> dict:
             received_from_mixer.append(edge["tx_hash"])
 
     evidence = sorted(set(sent_to_mixer) | set(received_from_mixer))
-    gaps = _gaps(case)
+    gaps = _gaps(case, max_hop=1)
     return {
         "name": "mixer_interaction",
         "value": {
@@ -246,9 +276,11 @@ def counterparty_concentration(case: dict) -> dict:
 
 
 def unlabelled_share(case: dict) -> dict:
-    """Proportion of direct counterparties with no label at all. A
-    confidence signal, not a risk signal: a subject whose counterparties
-    are mostly unknown cannot be meaningfully assessed either way.
+    """Proportion of direct counterparties with no label at all, out of
+    the total that's the denominator for — a share alone conflates "well
+    labelled" with "barely any data to judge from". A confidence signal,
+    not a risk signal: a subject whose counterparties are mostly unknown
+    cannot be meaningfully assessed either way.
     """
     subject = case["subject"]
     hop1 = case["trace"]["edges"]
@@ -258,15 +290,20 @@ def unlabelled_share(case: dict) -> dict:
     counterparties.discard(subject)
 
     unlabelled = [a for a in counterparties if not case["labels"].get(a)]
-    share = len(unlabelled) / len(counterparties) if counterparties else 0.0
+    total = len(counterparties)
+    share = len(unlabelled) / total if total else 0.0
+    sufficient_sample = total >= UNLABELLED_MIN_SAMPLE
 
     gaps = _gaps(case, max_hop=1)
+    if not sufficient_sample:
+        gaps = gaps + [f"only {total} direct counterpart(ies), below the minimum sample of {UNLABELLED_MIN_SAMPLE}"]
     return {
         "name": "unlabelled_share",
         "value": {
             "unlabelled_share": share,
             "unlabelled_count": len(unlabelled),
-            "total_counterparties": len(counterparties),
+            "total_counterparties": total,
+            "sufficient_sample": sufficient_sample,
         },
         "complete": len(gaps) == 0,
         "gaps": gaps,

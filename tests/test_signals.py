@@ -37,7 +37,7 @@ def test_sanctioned_exposure_flags_direct_sanctioned_counterparty():
         labels={"0xsanctioned": label("sanctioned")},
     )
     result = signals.sanctioned_exposure(case)
-    assert result["complete"] is True
+    assert result["complete"] == {"hop_1": True}
     assert result["value"]["touches"] == [{"hop": 1, "address": "0xsanctioned", "tx_hash": "0xtx1", "direction": "received"}]
     assert "0xtx1" in result["evidence"]
     assert "0xsanctioned" in result["evidence"]
@@ -74,8 +74,43 @@ def test_sanctioned_exposure_incomplete_when_trace_has_gaps():
         labels={},
     )
     result = signals.sanctioned_exposure(case)
-    assert result["complete"] is False
-    assert "1 hop-1 node(s) not_ingested" in result["gaps"]
+    assert result["complete"] == {"hop_1": False}
+    assert "1 hop-1 node(s) not_ingested" in result["gaps"]["hop_1"]
+
+
+def test_sanctioned_exposure_hop1_complete_while_hop2_is_not():
+    """The whole point of the correction: a gap two hops away must never
+    taint hop-1's own completeness, and hop-2 completeness must reflect
+    that hop-2 depends on hop-1 too.
+    """
+    case = make_case(
+        edges=[
+            edge(1, SUBJECT, "0xmiddle", "0xtx1"),  # hop 1: clean
+            edge(2, "0xmiddle", "0xdark", "0xtx2", terminal_reason="not_ingested"),  # hop 2: gap
+        ],
+        labels={},
+    )
+    result = signals.sanctioned_exposure(case)
+    assert result["complete"]["hop_1"] is True
+    assert result["complete"]["hop_2"] is False
+    assert result["gaps"]["hop_1"] == []
+    assert "1 hop-2 node(s) not_ingested" in result["gaps"]["hop_2"]
+
+
+def test_sanctioned_exposure_hop2_incomplete_when_hop1_has_a_gap_even_without_its_own():
+    """A not_ingested hop-1 node hides whatever might be behind it — hop-2
+    can never be complete just because hop 2 itself has no gap edges.
+    """
+    case = make_case(
+        edges=[edge(1, SUBJECT, "0xdark", "0xtx1", terminal_reason="not_ingested")],
+        labels={},
+    )
+    result = signals.sanctioned_exposure(case)
+    assert result["complete"]["hop_1"] is False
+    # only hop 1 exists here (nothing to expand past a not_ingested node),
+    # so there is no hop_2 key at all — the signal doesn't claim to know
+    # about a hop that was never reached.
+    assert "hop_2" not in result["complete"]
 
 
 # --- mixer_interaction ---
@@ -96,6 +131,34 @@ def test_mixer_interaction_ignores_non_mixer_counterparties():
     case = make_case(edges=[edge(1, SUBJECT, "0xordinary", "0xtx1")], labels={})
     result = signals.mixer_interaction(case)
     assert result["value"] == {"sent_to_mixer_count": 0, "received_from_mixer_count": 0}
+
+
+def test_mixer_interaction_ignores_hop2_and_stays_complete_despite_hop2_gap():
+    """mixer_interaction is scoped to direct transfers only — a hop-2 mixer
+    touch (or gap) must not affect it at all, per the milestone-3
+    correction: it is complete if the subject's own transfers are
+    ingested, regardless of gaps further out.
+    """
+    case = make_case(
+        edges=[
+            edge(1, SUBJECT, "0xordinary", "0xtx1"),
+            edge(2, "0xordinary", "0xmixer", "0xtx2", terminal_reason="not_ingested"),
+        ],
+        labels={"0xmixer": label("mixer")},
+    )
+    result = signals.mixer_interaction(case)
+    assert result["value"] == {"sent_to_mixer_count": 0, "received_from_mixer_count": 0}
+    assert result["complete"] is True
+    assert result["gaps"] == []
+
+
+def test_mixer_interaction_incomplete_only_on_its_own_hop1_gap():
+    case = make_case(
+        edges=[edge(1, SUBJECT, "0xdark", "0xtx1", terminal_reason="not_ingested")],
+        labels={},
+    )
+    result = signals.mixer_interaction(case)
+    assert result["complete"] is False
 
 
 # --- pass_through ---
@@ -178,6 +241,36 @@ def test_unlabelled_share_is_zero_with_no_counterparties():
     case = make_case(edges=[])
     result = signals.unlabelled_share(case)
     assert result["value"]["unlabelled_share"] == 0.0
+
+
+def test_unlabelled_share_below_min_sample_is_incomplete_even_at_zero_percent():
+    """0% unlabelled over 2 counterparties is not the same confidence as
+    0% over 300 — a tiny sample must read as low confidence (incomplete),
+    not high confidence, so the eventual unassessable rule can't be fooled
+    by a subject with almost no direct activity.
+    """
+    case = make_case(
+        edges=[
+            edge(1, SUBJECT, "0xa", "0xtx1"),
+            edge(1, SUBJECT, "0xb", "0xtx2"),
+        ],
+        labels={"0xa": label("exchange"), "0xb": label("exchange")},
+    )
+    result = signals.unlabelled_share(case)
+    assert result["value"]["unlabelled_share"] == 0.0
+    assert result["value"]["total_counterparties"] == 2
+    assert result["value"]["sufficient_sample"] is False
+    assert result["complete"] is False
+    assert any("minimum sample" in g for g in result["gaps"])
+
+
+def test_unlabelled_share_at_or_above_min_sample_is_sufficient():
+    edges = [edge(1, SUBJECT, f"0xcp{i}", f"0xtx{i}") for i in range(signals.UNLABELLED_MIN_SAMPLE)]
+    labels = {f"0xcp{i}": label("exchange") for i in range(signals.UNLABELLED_MIN_SAMPLE)}
+    case = make_case(edges=edges, labels=labels)
+    result = signals.unlabelled_share(case)
+    assert result["value"]["sufficient_sample"] is True
+    assert result["complete"] is True
 
 
 def test_all_signals_importable_with_no_ingest_or_enrich_db_dependency():
