@@ -206,9 +206,12 @@ on-chain and traceable, which is not what `custody_change` exists to flag
 one RPC call per address that doesn't have it set yet (0 calls on a
 re-run).
 
-Real run: **30/2736 addresses labelled, 2706 unknown** (idempotent — a
-second `load-labels` run reports the same numbers). 217/2736 addresses
-are contracts (2736 `eth_getCode` calls on the first run, 0 on re-run).
+Real run: **34/2763 addresses labelled, 2729 unknown** (idempotent — a
+second `load-labels` run reports the same numbers). 217/2763 addresses
+are contracts (27 `eth_getCode` calls needed after the `expand` round
+below added new addresses; 0 needed on a subsequent re-run — every
+address already has `is_contract` set, confirmed directly against the
+`addresses` table).
 
 Of the top 50 counterparties by fan-out, **9/50 now carry a label**
 (6 `exchange`, 1 `mixer`, 3 `unknown` from the deliberately-unmapped
@@ -260,7 +263,7 @@ loopback connects raise) to prove the zero-RPC claim:
 
 ```
 python -m enrich trace --chain ethereum --address 0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc --hops 2 --direction out --max-fanout 300
-  trace #8: 502 edge(s) recorded, status=ok
+  trace #14: 502 edge(s) recorded, status=ok
     not_ingested: 502 edge(s)
 ```
 
@@ -270,22 +273,55 @@ is honestly marked `not_ingested`, not silently dropped.
 
 ```
 python -m enrich trace --chain ethereum --address 0x0ee5067b06776a89ccc7dc8ee369984ad7db5e06 --hops 2 --direction both --max-fanout 400
-  trace #9: 388 edge(s) recorded, status=ok
+  trace #16: 406 edge(s) recorded, status=ok
     custody_change: 2 edge(s)
-    hop_limit: 71 edge(s)
-    not_ingested: 277 edge(s)
+    hop_limit: 89 edge(s)
+    not_ingested: 267 edge(s)
 ```
 
-This OFAC subject has 317 direct counterparties: 2 edges (both into the
+This OFAC subject has 280 direct counterparties: 2 edges (both into the
 now-Kraken-labelled `0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0`) stop
-with `custody_change` and are correctly *not* traced further; 38 other
-counterparties had further local activity of their own and expanded to 71
-hop-2 edges (`hop_limit`); the remaining 277 had no activity beyond the
-edge that reached them and are marked `not_ingested` — verified directly
-against the data, not asserted. Before the exchange labels were loaded,
-those 2 edges were counted under `hop_limit` instead — traced through as
-ordinary counterparties, a real false continuation past a custody
-boundary.
+with `custody_change` and are correctly *not* traced further; 48 other
+counterparties had further local activity of their own and expanded to 89
+hop-2 edges (`hop_limit`); the remaining 267 had no activity beyond the
+edge that reached them and are marked `not_ingested`. Cross-checked
+directly against the data: every one of those 267 has, at most, only the
+duplicate transfer(s) that are the incoming edge itself — never a third
+party — so none of them are silently mis-marked.
+
+#### `expand`, and a second dormant-window bug it exposed
+
+Ran `expand --top 20 --blocks 5000` for both OFAC subjects (40 candidate
+addresses total). First attempt: 162 RPC calls, **0 rows written** — every
+candidate's ranking came from its full known history (some back to 2019),
+but the ingest window was `[latest_block - 5000, latest_block]`, the same
+head-relative default as `ingest`. Same class of bug fixed for `ingest` in
+milestone 1, reappearing in `expand`. Fixed by anchoring each candidate's
+window to its own last known interaction block instead of chain head
+(same fix shape, applied to the one place that still had the old
+behaviour). Re-running the fixed version against the same 40 candidates:
+322 RPC calls, real data for 39/40.
+
+Before/after, both OFAC traces:
+
+| | hop-1 `not_ingested` | hop-2 edges (`hop_limit`) | total edges |
+|---|---:|---:|---:|
+| OFAC subject 1 (71 lifetime txns) — before | 60 | 315 | 388 |
+| OFAC subject 1 — after | 44 | 340 | 413 |
+| OFAC subject 2 (312 lifetime txns) — before | 277 | 71 | 388 |
+| OFAC subject 2 — after | 267 | 89 | 406 |
+
+**26 hop-1 nodes moved out of `not_ingested`** across both subjects (16 +
+10) — real counterparty history that is now part of the local graph
+instead of an acknowledged unknown. Total RPC calls for the whole
+`expand` exercise, including the wasted first attempt: **484** (162 +
+322). Alchemy doesn't expose compute-unit cost in the JSON-RPC response
+(checked directly — no `X-*` CU header on any response), so this is a
+call count, not an authoritative CU figure; check the Alchemy dashboard
+for the exact CU total if that matters. At this rate (roughly 8 RPC
+calls per address ingested) a much larger expansion is a call-count
+question, not obviously a CU-budget one — worth re-checking if a future
+round expands hundreds of addresses rather than dozens.
 
 `expand` ranks a subject's direct counterparties by total native ETH value
 transferred (same methodology as the per-address counterparty ranking
@@ -296,6 +332,7 @@ the top N.
 
 ### Tests
 
-`pytest` — 39 tests, all offline. `tests/test_trace.py` covers each of the
+`pytest` — 44 tests, all offline. `tests/test_trace.py` covers each of the
 four termination reasons against fixture data, including a regression test
-for the `not_ingested`-vs-`both`-direction edge case above.
+for the `not_ingested`-vs-`both`-direction edge case above, and
+`tests/test_expand.py` covers the window-anchoring fix described above.
