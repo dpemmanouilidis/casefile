@@ -151,18 +151,22 @@ def cmd_expand(args: argparse.Namespace) -> int:
     address = args.address.lower()
     rows = conn.execute(
         """
-        SELECT from_address, to_address, amount_raw FROM transfers
-        WHERE chain_id = ? AND asset_address IS NULL AND (from_address = ? OR to_address = ?)
+        SELECT tr.from_address, tr.to_address, tr.amount_raw, t.block_number
+        FROM transfers tr
+        JOIN transactions t ON t.chain_id = tr.chain_id AND t.tx_hash = tr.tx_hash
+        WHERE tr.chain_id = ? AND tr.asset_address IS NULL AND (tr.from_address = ? OR tr.to_address = ?)
         """,
         (args.chain, address, address),
     ).fetchall()
 
     totals: dict[str, int] = defaultdict(int)
-    for from_a, to_a, amount_raw in rows:
+    last_known_block: dict[str, int] = {}
+    for from_a, to_a, amount_raw, block_number in rows:
         counterparty = to_a if from_a == address else from_a
         if counterparty == address:
             continue
         totals[counterparty] += int(amount_raw)
+        last_known_block[counterparty] = max(last_known_block.get(counterparty, 0), block_number)
 
     candidates = []
     for counterparty, total in totals.items():
@@ -183,10 +187,19 @@ def cmd_expand(args: argparse.Namespace) -> int:
     api_key = load_api_key()
     client = AlchemyClient(api_key=api_key)
     latest = client.latest_block()
-    from_block = max(0, latest - args.blocks)
 
+    # Ranking is done over each counterparty's full known history, which
+    # can be years old — a window relative to the current chain head would
+    # almost always miss it (the exact gap that produced zero data the
+    # first time this command was run against dormant subjects). Anchor
+    # each candidate's window to its own last known interaction block
+    # instead, same fix as ingest's --from-block/--to-block.
+    half = args.blocks // 2
     for counterparty, _total in top:
-        ingest_address(conn, client, counterparty, from_block, latest, dry_run=False)
+        anchor = last_known_block[counterparty]
+        from_block = max(0, anchor - half)
+        to_block = min(latest, anchor + half)
+        ingest_address(conn, client, counterparty, from_block, to_block, dry_run=False)
 
     conn.close()
     return 0
