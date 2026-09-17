@@ -47,6 +47,17 @@ Violating any of these defeats the point of the project.
    including when the reconstruction would plausibly be identical to a real run.
    If a cited artifact (a database row, a narrative id) changes, re-run the command
    and re-capture; do not hand-edit the old transcript.
+8. **No reporting an action without showing its proof.** A commit, a push, or a
+   file write is never reported as done on the strength of the command that was
+   supposed to do it — its own exit code is not evidence the repository actually
+   changed. Show the verifying command's real output in the same reply: `git log
+   --oneline -1` and `git status` after a commit or push, a directory listing or
+   file read after a write. Every milestone-4 commit and push reported in an
+   earlier session, specific hashes included, had not actually happened —
+   `narrate/` and `eval/` were untracked and `origin/main` was four sessions
+   behind, found only by checking GitHub directly. Same failure class as the
+   fabricated transcript that produced rule 7: a report of an action standing in
+   for verification that the action occurred.
 
 ## Module boundaries
 

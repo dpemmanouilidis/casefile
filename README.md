@@ -1,11 +1,18 @@
 # casefile
 
 A self-hosted agentic investigation pipeline for on-chain data. See
-[CLAUDE.md](CLAUDE.md) for the project's design rules and
-[docs/milestone-3.md](docs/milestone-3.md) for the current milestone spec
-(milestones 1 and 2, below, are done; see
-[docs/milestone-1.md](docs/milestone-1.md) and
-[docs/milestone-2.md](docs/milestone-2.md) for their specs).
+[CLAUDE.md](CLAUDE.md) for the project's design rules. All four
+milestones are complete — see [docs/milestone-1.md](docs/milestone-1.md),
+[docs/milestone-2.md](docs/milestone-2.md),
+[docs/milestone-3.md](docs/milestone-3.md), and
+[docs/milestone-4.md](docs/milestone-4.md) for their specs.
+
+**Current test count: `pytest --collect-only -q` collects 143 tests**, all
+offline, as of the milestone-4 close (17 September 2026). This is the one
+place this README states the current total — every other test count
+below is an explicitly dated historical snapshot from an earlier
+milestone's close, not a claim about the suite today; re-run the command
+rather than trust a number anywhere else in this file.
 
 ## Milestone 1: ingest
 
@@ -108,9 +115,9 @@ as of this writing (`pytest --collect-only -q`), all offline. Milestone
 
 > **Provenance:** count captured 16 September 2026, at milestone 1's
 > close. **The command is reproducible; this specific number is not** —
-> the suite has grown since (125 tests as of the milestone-4 work,
-> confirmed by re-running `pytest --collect-only -q` directly). Anyone
-> wanting the current count should run the command, not read this line.
+> the suite has grown since (see the current count stated once, at the
+> top of this README, rather than restated here where it would drift
+> again).
 
 ### Known limitation
 
@@ -557,9 +564,10 @@ itself imports nothing from `ingest`, `enrich`, or `sqlite3`.
 
 > **Provenance:** count captured 16 September 2026, at milestone 3's
 > close. **The command is reproducible; this specific number is not** —
-> same caveat as milestone 1's test count above (125 as of the
-> milestone-4 work). The AST-based import-boundary check is a real,
-> currently-passing test regardless of the total count drifting.
+> same caveat as milestone 1's test count above; see the current count
+> stated once, at the top of this README. The AST-based import-boundary
+> check is a real, currently-passing test regardless of the total count
+> drifting.
 
 ## Milestone 4: narrate
 
@@ -1037,7 +1045,7 @@ milestone 2 and 3 closing passes:
 
 1. **`narrate/verify.py` tested with hand-written strings/dicts only; AST
    check confirms no `ingest`/`enrich` import.** ✅
-   `tests/test_narrate_verify.py` — 33 tests, every one a hand-written
+   `tests/test_narrate_verify.py` — 41 tests, every one a hand-written
    string plus a hand-written dict, plus
    `test_verify_module_imports_nothing_from_ingest_or_enrich`, the same
    AST-walk pattern `gate/rules.py`'s test uses.
@@ -1078,7 +1086,7 @@ milestone 2 and 3 closing passes:
    model-pulled check, not a hardcoded flag. Confirmed both paths: it
    runs and passes against this machine's real Ollama instance, and the
    skip predicate independently verified to return `False` (and thus
-   skip, not fail) when pointed at an unreachable host. **141 tests
-   total** as of this pass (`pytest --collect-only -q`), all passing,
-   zero touching the network in any test other than this one gated
-   integration test.
+   skip, not fail) when pointed at an unreachable host. See the current
+   test count stated once, at the top of this README, rather than
+   restated here — all passing, zero touching the network in any test
+   other than this one gated integration test.
