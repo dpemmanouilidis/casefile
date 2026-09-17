@@ -7,6 +7,9 @@ milestones are complete — see [docs/milestone-1.md](docs/milestone-1.md),
 [docs/milestone-3.md](docs/milestone-3.md), and
 [docs/milestone-4.md](docs/milestone-4.md) for their specs.
 
+[docs/writeup.md](docs/writeup.md) is the write-up for someone who wants
+the result, not the reference.
+
 **Current test count: `pytest --collect-only -q` collects 143 tests**, all
 offline, as of the milestone-4 close (17 September 2026). This is the one
 place this README states the current total — every other test count
