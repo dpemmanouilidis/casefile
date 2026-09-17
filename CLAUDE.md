@@ -40,6 +40,13 @@ Violating any of these defeats the point of the project.
    `narrate/`, or the storage schema.
 6. **Measured, not asserted.** Any claim in the README must come from a number that
    `eval/` produced. No claim without a measurement behind it.
+7. **No reconstructed output.** No command output, transcript, or quoted result
+   appears in the README or any doc unless it was captured from a real run of that
+   exact command. Reconstructed, paraphrased, or illustrative output is prohibited —
+   including editing a real capture's id or numbers to match a later state, and
+   including when the reconstruction would plausibly be identical to a real run.
+   If a cited artifact (a database row, a narrative id) changes, re-run the command
+   and re-capture; do not hand-edit the old transcript.
 
 ## Module boundaries
 
