@@ -1,6 +1,6 @@
 # What it costs to stop a local model from making things up
 
-A 9.7B model running on a 12GB consumer card produced compliance case files
+A 9B model running on a 12GB consumer card produced compliance case files
 that passed seven verification checks on the first attempt, every time, across
 sixteen cases. A 3B model on the same hardware, same evidence, same checks,
 managed 12%.
